@@ -48,19 +48,19 @@ def extract_bibliography_section(text: str, keywords: List[str] = ["Reference", 
 
 
 # --- Step 2: Split the bibliography text into individual references ---
-class ReferenceExtraction(BaseModel):
-    title: str
-    authors: list[str]
-    DOI: str = ''  # Make DOI optional, as not all references will have one
-    type: str
-    input_bibliography: str
+def split_references(bib_text):
 
+    class ReferenceExtraction(BaseModel):
+        title: str
+        authors: list[str]
+        DOI: str
+        type: str
+        input_bibliography: str
 
-def split_references(bib_text: str) -> List[ReferenceExtraction]:
     client = genai.Client(api_key=GOOGLE_API_KEY)
     response = client.models.generate_content(
         model='gemini-2.0-flash',
-        contents='Here is a list of references, extracted from a PDF file - so please change lines and spaces when necessary. Please extract title, authors, DOI and type (journal_article, book, OR website), and give the (optimized) original input within one line: \n' + bib_text,
+        contents='Here is a list of references, extracted from a PDF file - so please change lines and spaces when necessary. Please extract title, authors, DOI and type (journal_article, book, OR website), and give the original input within one line: \n' + bib_text,
         config={
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
@@ -132,7 +132,7 @@ def search_title(title: str) -> bool:
 
 # --- Main Workflow ---
 
-def veci_cite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
+def veri_ex_citing(pdf_path: str) -> Tuple[int, int, int, List[str]]:
     # 1. Extract text from PDF and find bibliography
     full_text = extract_text_from_pdf(pdf_path)
     bib_text = extract_bibliography_section(full_text)
@@ -173,7 +173,7 @@ def process_folder(folder_path: str, output_filename: str = None) -> None:
     for pdf_file in pdf_files:
         pdf_path = os.path.join(folder_path, pdf_file)
         print(f"Checking file: {pdf_file}")
-        count_verified, count_warning, count_skipped, list_warning = VeciCite(pdf_path)
+        count_verified, count_warning, count_skipped, list_warning = veri_ex_citing(pdf_path)
         print(f"{count_verified} references verified, {count_warning} warnings.")
         if count_warning > 0:
             print("WARNING LIST:")
