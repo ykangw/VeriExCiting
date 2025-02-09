@@ -20,7 +20,6 @@ GOOGLE_API_KEY = "YOUR_API_KEY"
 
 
 # --- Step 1: Read PDF and extract bibliography section ---
-
 def extract_text_from_pdf(pdf_path: str) -> str:
     """Extract text from all pages of the PDF."""
     text = ""
@@ -31,6 +30,7 @@ def extract_text_from_pdf(pdf_path: str) -> str:
             if page_text:
                 text += page_text + "\n"
     return text
+
 
 def extract_bibliography_section(text: str, keywords: List[str] = ["Reference", "Bibliography", "Works Cited"]) -> str:
     """
@@ -132,7 +132,7 @@ def search_title(title: str) -> bool:
 
 # --- Main Workflow ---
 
-def veri_ex_citing(pdf_path: str) -> Tuple[int, int, int, List[str]]:
+def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
     # 1. Extract text from PDF and find bibliography
     full_text = extract_text_from_pdf(pdf_path)
     bib_text = extract_bibliography_section(full_text)
@@ -164,7 +164,7 @@ def veri_ex_citing(pdf_path: str) -> Tuple[int, int, int, List[str]]:
     return count_verified, count_warning, count_skipped, list_warning
 
 
-def process_folder(folder_path: str, output_filename: str = None) -> None:
+def process_folder(folder_path: str) -> None:
     pdf_files = [f for f in os.listdir(folder_path) if f.endswith('.pdf')]
     pdf_files.sort()
     print(f"Found {len(pdf_files)} PDF files in the folder.")
@@ -173,8 +173,8 @@ def process_folder(folder_path: str, output_filename: str = None) -> None:
     for pdf_file in pdf_files:
         pdf_path = os.path.join(folder_path, pdf_file)
         print(f"Checking file: {pdf_file}")
-        count_verified, count_warning, count_skipped, list_warning = veri_ex_citing(pdf_path)
-        print(f"{count_verified} references verified, {count_warning} warnings.")
+        count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
+        print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
         if count_warning > 0:
             print("WARNING LIST:")
             for warning in list_warning:
@@ -190,11 +190,16 @@ def process_folder(folder_path: str, output_filename: str = None) -> None:
 
 if __name__ == "__main__":
     ''' Example usage #1: check a single PDF file '''
-    #     pdf_path = "example.pdf"
-    #     count_verified, count_warning, list_warning = VeciCite(pdf_path)
-    #     print(f"\n{count_verified} references verified, {count_warning} warnings.")
+    # pdf_path = "path/to/your/paper.pdf"
+    # count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
+    # print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
+    #
+    # if count_warning > 0:
+    #     print("Warning List:")
+    #     for item in list_warning:
+    #         print(item)
 
     ''' Example usage #2: check all PDF files in a folder '''
     # Please replace the folder path to your directory containing the PDF files.
-    folder_path = "/Users/yk/Library/CloudStorage/OneDrive-Personal/2024-PhD/CASA0007/Assessment/Yikang_Copies"
+    folder_path = "path/to/your/folder"
     process_folder(folder_path)
