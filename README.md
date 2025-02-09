@@ -51,7 +51,7 @@ The rise of powerful LLMs has brought with it the potential for generating reali
 ### 1. Single PDF File
 
 ```python
-from veriexcite import veci_cite
+from veriexcite import veriexcite
 
 pdf_path = "path/to/your/paper.pdf"
 count_verified, count_warning, count_skipped, list_warning = veci_cite(pdf_path)

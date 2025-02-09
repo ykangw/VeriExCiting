@@ -9,14 +9,15 @@ from scholarly import scholarly
 import logging
 from typing import List, Tuple, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential
-
 from google import genai
 
-
 # --- Configuration ---
-GOOGLE_API_KEY = "YOUR_API_KEY"
-# Replace with your Google Gemini API key
-# Apply for a key at https://ai.google.dev/aistudio with 1500 requests per day for FREE
+GOOGLE_API_KEY = None
+
+def set_google_api_key(api_key: str):
+    """Set Google Gemini API key."""
+    global GOOGLE_API_KEY
+    GOOGLE_API_KEY = api_key
 
 
 # --- Step 1: Read PDF and extract bibliography section ---
@@ -64,6 +65,7 @@ def split_references(bib_text):
         config={
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
+            'temperature': 0,
         },
     )
 
@@ -187,8 +189,12 @@ def process_folder(folder_path: str) -> None:
     print("Results saved to VeriCite results.csv")
 
 
-
 if __name__ == "__main__":
+    ''' Set your Google Gemini API key here '''
+    # Apply for a key at https://ai.google.dev/aistudio with 1500 requests per day for FREE
+    GOOGLE_API_KEY = "YOUR_API_KEY"
+    set_google_api_key(GOOGLE_API_KEY)
+
     ''' Example usage #1: check a single PDF file '''
     # pdf_path = "path/to/your/paper.pdf"
     # count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
