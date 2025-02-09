@@ -53,15 +53,29 @@ def split_references(bib_text):
 
     class ReferenceExtraction(BaseModel):
         title: str
-        authors: list[str]
+        first_author_family_name: str
         DOI: str
+        year: int
         type: str
-        input_bibliography: str
+        normalised_input_bibliography: str
+
+    prompt = """
+    Process the reference list extracted from a PDF (formatting may be corrupted). 
+    Perform these steps:
+    1. Normalisation: Fix spacing errors, line breaks, and punctuation.
+    2. Extraction: For each reference, extract:
+    - Title (full title case)
+    - first author's family name
+    - DOI (include if explicitly stated; otherwise leave blank)
+    - Year (4-digit publication year)
+    - Type (journal_article, book, OR non_academic_website)
+    - Normalised input bibliography (in one line)\n\n
+    """
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
     response = client.models.generate_content(
         model='gemini-2.0-flash',
-        contents='Here is a list of references, extracted from a PDF file - so please change lines and spaces when necessary. Please extract title, authors, DOI and type (journal_article, book, OR website), and give the original input within one line: \n' + bib_text,
+        contents=prompt + bib_text,
         config={
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
@@ -149,7 +163,7 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
     list_warning = []
 
     for idx, ref in enumerate(references):
-        if ref.type == "website":
+        if ref.type == "non_academic_website":
             count_skipped += 1
             continue
 
@@ -162,7 +176,7 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
         else:
             # print("WARNING: This reference may be fabricated or AI-generated.")
             count_warning += 1
-            list_warning.append(ref.input_bibliography)
+            list_warning.append(ref.normalised_input_bibliography)
     return count_verified, count_warning, count_skipped, list_warning
 
 
