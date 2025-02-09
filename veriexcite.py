@@ -60,8 +60,8 @@ def split_references(bib_text):
         normalised_input_bibliography: str
 
     prompt = """
-    Process the reference list extracted from a PDF (formatting may be corrupted). 
-    Perform these steps:
+    Process a reference list extracted from a PDF, where formatting may be corrupted.  
+    Follow these steps to clean and extract key information: 
     1. Normalisation: Fix spacing errors, line breaks, and punctuation.
     2. Extraction: For each reference, extract:
     - Title (full title case)
@@ -69,7 +69,7 @@ def split_references(bib_text):
     - DOI (include if explicitly stated; otherwise leave blank)
     - Year (4-digit publication year)
     - Type (journal_article, book, OR non_academic_website)
-    - Normalised input bibliography (in one line)\n\n
+    - Normalised input bibliography (correct format, in one line)\n\n
     """
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
