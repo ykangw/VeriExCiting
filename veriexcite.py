@@ -68,7 +68,7 @@ def split_references(bib_text):
     - first author's family name
     - DOI (include if explicitly stated; otherwise leave blank)
     - Year (4-digit publication year)
-    - Type (journal_article, book, OR non_academic_website)
+    - Type (journal_article, conference_paper, book, book_chapter, OR non_academic_website)
     - Normalised input bibliography (correct format, in one line)\n\n
     """
 
