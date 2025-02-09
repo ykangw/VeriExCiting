@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
-**VeriExCite** is a Python tool designed to help you verify the exsitance of citations in academic papers (PDF format). It extracts the bibliography section from a PDF, parses individual references, and then checks their validity against Crossref and Google Scholar databases.
+**VeriExCite** is a Python tool designed to help you verify the existence of citations in academic papers (PDF format). It extracts the bibliography section from a PDF, parses individual references, and then checks their validity against Crossref and Google Scholar databases.
 
 ## Why VeriExCite?
 
@@ -16,20 +16,20 @@ The rise of powerful LLMs has brought with it the potential for generating reali
     *   Checks references against Crossref and Google Scholar.
     *   Identifies potentially fabricated citations.
 *   **Reporting:**
-    *   Provides a summary of verified, skipped (non academic reference, such as a goverment website or a dataset), and potentially fabricated references.
+    *   Provides a summary of verified, skipped (e.g., non-academic references, such as a government website or a dataset), and potentially fabricated references.
     *   Outputs results to a CSV file for easy analysis.
-*  **Folder Processing:** Processes all PDF files in a directory in a single run, suitable for academics and teaching assistants in marking senarios.
-*  **Privacy-Conscious:**  Only the bibliography section of the PDF is sent to the Google Gemini API. This is crucial for complying with university policies that often prohibit uploading student work (which students hold copyright over) to third-party LLM services. The full text of the paper *is not* uploaded.
+*  **Folder Processing:** Processes all PDF files in a directory in a single run, suitable for academics and teaching assistants in marking scenarios.
+*  **Privacy-Conscious:** Only the bibliography section of the PDF is sent to the Google Gemini API. This is crucial for complying with university policies that often prohibit uploading student work (which students hold copyright for) to third-party LLM services. The full text of the paper *is not* uploaded.
 
 ## Requirements
 
-1. **Python Libraries:****
+1. **Python Libraries:**
 
    *   `PyPDF2`: For PDF text extraction.
    *   `pydantic`: For data validation and structuring.
    *   `requests`: For making API requests.
    *   `pandas`: For data analysis and CSV output.
-   *   `re`:  For regular expressions (text processing).
+   *   `re`: For regular expressions (text processing).
    *   `unidecode`: For handling accented characters.
    *   `scholarly`: For accessing Google Scholar data.
    *   `tenacity`: For implementing retry logic.
@@ -43,15 +43,15 @@ The rise of powerful LLMs has brought with it the potential for generating reali
 
 3.  **Google Gemini API Key:**
     
-    *   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio).  It's free with 1500 request per day!
-    *   Put your API key in the `GOOGLE_API_KEY` in the code. 
+    *   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free with 1500 requests per day!
+    *   Set your API key to the `GOOGLE_API_KEY` variable in the code. 
 
 ## Usage
 
 ### 1. Single PDF File
 
 ```python
-from veriexcite import veci_cite  # Or the appropriate filename
+from veriexcite import veci_cite
 
 pdf_path = "path/to/your/paper.pdf"
 count_verified, count_warning, count_skipped, list_warning = veci_cite(pdf_path)
@@ -67,7 +67,7 @@ if count_warning > 0:
 ### 2. Process a Folder of PDFs
 
 ```python
-from veriexcite import process_folder  # Or the appropriate filename
+from veriexcite import process_folder
 
 folder_path = "path/to/your/pdf/folder"
 process_folder(folder_path)
@@ -76,10 +76,13 @@ This will create a `VeriCite results.csv` file in the current directory with the
 
 ## Interpreting Results
 
-*   **Found References:** The total number of references extracted from the biblography section of the PDF.
+*   **Found References:** The total number of references extracted from the bibliography section of the PDF.
 *   **Skipped website:** Websites are skipped because they often lack the structured metadata needed for reliable verification.
 *   **Verified:** References that were successfully matched in Crossref or Google Scholar.
-*   **Warnings:** References that could *not* be verified.  These are potential areas of concern and should be investigated manually.
-*   **Warning List:** The raw text of the unverified references.
+*   **Warnings:** References that could *not* be verified. 
+*   **Warning List:** The raw text of the unverified references. 
 
+> [!IMPORTANT]
+>
+> A "warning" from VeriExCite indicates suspicion. Manual verification is required. 
 
