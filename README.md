@@ -23,38 +23,41 @@ The rise of powerful LLMs has brought with it the potential for generating reali
 
 ## Requirements
 
-1. **Python Libraries:**
+1. *   
 
-   *   `PyPDF2`: For PDF text extraction.
-   *   `pydantic`: For data validation and structuring.
-   *   `requests`: For making API requests.
-   *   `pandas`: For data analysis and CSV output.
-   *   `re`: For regular expressions (text processing).
-   *   `unidecode`: For handling accented characters.
-   *   `scholarly`: For accessing Google Scholar data.
-   *   `tenacity`: For implementing retry logic.
-   *   `google-genai`: For accessing Google Gemini. 
-
-   **Install requirements:**
-
-   ```
-   pip install -r requirements.txt
-   ```
-
-   OR
-
-   ```bash
-   pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-genai
-   ```
-
-3.  **Google Gemini API Key:**
-    
-    *   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free with 1500 requests per day!
-    *   Set your API key to the `GOOGLE_API_KEY` variable in the code. 
 
 ## Usage
 
-### 1. Single PDF File
+### 1. Try the Web App
+
+For quick and easy verification, use our web app: [https://veriexcite.streamlit.app/](https://veriexcite.streamlit.app/) 
+
+[![VeriExCite Web App Screenshot](images/streamlit_screenshot.png)](https://veriexcite.streamlit.app/)
+
+The web app allows you to upload one or more PDF files directly and see the results in your browser. 
+
+### 2. Local Installation
+
+You can also run VeriExCite locally with Python. 
+
+**Install requirements:**
+
+```
+pip install -r requirements.txt
+```
+
+OR
+
+```bash
+pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-genai
+```
+
+**Set Google Gemini API Key:**
+
+*   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free with 1500 requests per day!
+*   Set your API key to the `GOOGLE_API_KEY` variable in the code. 
+
+#### 2.1 Single PDF File
 
 ```python
 from veriexcite import veriexcite
@@ -70,7 +73,7 @@ if count_warning > 0:
       print(item)
 ```
 
-### 2. Process a Folder of PDFs
+#### 2.2 Process a Folder of PDFs
 
 ```python
 from veriexcite import process_folder
@@ -78,7 +81,7 @@ from veriexcite import process_folder
 folder_path = "path/to/your/pdf/folder"
 process_folder(folder_path)
 ```
-This will create a `VeriCite results.csv` file in the current directory with the results.
+This creates `VeriCite results.csv` file in the current directory.
 
 ## Interpreting Results
 
