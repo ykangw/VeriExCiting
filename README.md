@@ -37,6 +37,12 @@ The rise of powerful LLMs has brought with it the potential for generating reali
 
    **Install requirements:**
 
+   ```
+   pip install -r requirements.txt
+   ```
+
+   OR
+
    ```bash
    pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-generativeai
    ```
