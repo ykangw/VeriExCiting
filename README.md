@@ -21,10 +21,6 @@ The rise of powerful LLMs has brought with it the potential for generating reali
 *  **Folder Processing:** Processes all PDF files in a directory in a single run, suitable for academics and teaching assistants in marking scenarios.
 *  **Privacy-Conscious:** Only the bibliography section of the PDF is sent to the Google Gemini API. This is crucial for complying with university policies that often prohibit uploading student work (which students hold copyright for) to third-party LLM services. The full text of the paper *is not* uploaded.
 
-## Requirements
-
-1. *   
-
 
 ## Usage
 
