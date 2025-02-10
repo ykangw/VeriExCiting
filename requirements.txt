@@ -7,3 +7,4 @@ scholarly
 streamlit
 tenacity
 Unidecode
+google-genai
