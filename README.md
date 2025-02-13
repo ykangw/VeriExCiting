@@ -59,7 +59,7 @@ pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-
 from veriexcite import veriexcite
 
 pdf_path = "path/to/your/paper.pdf"
-count_verified, count_warning, count_skipped, list_warning = veci_cite(pdf_path)
+count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
 
 print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
 

@@ -39,17 +39,15 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
 
     ref_type_dict = {"journal_article": "Journal Article", "conference_paper": "Conference Paper",
                      "book": "Book", "book_chapter": "Book Chapter", "non_academic_website": "Website"}
-    status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning", "Skipped": "⏭️Skipped"}
+    status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning"}
 
     results = []
     for idx, ref in enumerate(references):
         status = "Pending"
-        if ref.type == "non_academic_website":
-            status = "Skipped"
         results.append({
-            "Title": ref.title,
             "First Author": ref.first_author_family_name,
             "Year": str(ref.year),
+            "Title": ref.title,
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
             "Reference Text": ref.normalised_input_bibliography,
@@ -66,15 +64,9 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
                           })
     verified_count = 0
     warning_count = 0
-    skipped_count = 0
-    progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count} | Skipped: {skipped_count}")
+    progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
 
     for index, row in df.iterrows():
-        if row["Status"] == "Skipped":
-            skipped_count += 1
-            progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count} | Skipped: {skipped_count}")
-            continue
-
         is_verified = search_title(row["Title"])
         if is_verified:
             df.loc[index, "Status"] = "Verified"
@@ -93,7 +85,7 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
                                   "DOI": st.column_config.LinkColumn()
                               })
 
-        progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count} | Skipped: {skipped_count}")
+        progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
 
     return df
 
