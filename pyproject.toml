@@ -1,0 +1,22 @@
+[project]
+name = "veriexciting"
+version = "0.1.0"
+description = "**VeriExCite** is a Python tool designed to help you verify the existence of citations in academic papers (PDF format). It extracts the bibliography section from a PDF, parses individual references, and then checks their validity against Crossref and Google Scholar databases."
+readme = "README.md"
+authors = [
+  { name = "Yikang Wang", email = "yikang.wang.21@ucl.ac.uk" },
+]
+license = { text = "Apache 2.0" }
+requires-python = ">=3.13"
+dependencies = [
+    "google-genai>=1.2.0",
+    "pandas>=2.2.3",
+    "protobuf>=5.29.3",
+    "pydantic>=2.10.6",
+    "pypdf2>=3.0.1",
+    "requests>=2.32.3",
+    "scholarly>=1.7.11",
+    "streamlit>=1.42.0",
+    "tenacity>=9.0.0",
+    "unidecode>=1.3.8",
+]
