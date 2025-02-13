@@ -36,16 +36,26 @@ The web app allows you to upload one or more PDF files directly and see the resu
 
 You can also run VeriExCite locally with Python. 
 
-**Install requirements:**
+#### Prerequisites
+- Python 3.10 or higher
+- [uv](https://github.com/astral-sh/uv) - Fast Python package installer and resolver
 
-```
-pip install -r requirements.txt
-```
+#### Steps
 
-OR
-
+1. Clone the repository:
 ```bash
-pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-genai
+git clone https://github.com/AdamZhou3/VeriExciting.git
+cd VeriExciting
+```
+
+2. Install dependencies using uv:
+```bash
+uv pip install .
+```
+
+3. Run the Streamlit app:
+```bash
+streamlit run streamlit_app.py 
 ```
 
 **Set Google Gemini API Key:**
