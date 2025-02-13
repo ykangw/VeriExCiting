@@ -10,6 +10,7 @@ import logging
 from typing import List, Tuple, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
+from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
@@ -49,15 +50,15 @@ def extract_bibliography_section(text: str, keywords: List[str] = ["Reference", 
 
 
 # --- Step 2: Split the bibliography text into individual references ---
-def split_references(bib_text):
+class ReferenceExtraction(BaseModel):
+    title: str
+    first_author_family_name: str
+    DOI: str
+    year: int
+    type: str
+    normalised_input_bibliography: str
 
-    class ReferenceExtraction(BaseModel):
-        title: str
-        first_author_family_name: str
-        DOI: str
-        year: int
-        type: str
-        normalised_input_bibliography: str
+def split_references(bib_text):
 
     prompt = """
     Process a reference list extracted from a PDF, where formatting may be corrupted.  
@@ -138,17 +139,51 @@ def search_title_crossref(title: str) -> bool:
     return False
 
 
-def search_title(title: str) -> bool:
-    """Searches for a title using Crossref, then Scholarly if Crossref fails."""
-    if search_title_crossref(title):
+def search_title_google(ref: ReferenceExtraction) -> bool:
+
+    prompt = """
+    Please search for the reference on Google, compare with research results, and determine if it is genuine.
+    Return 'True' only if a website with the the exact title and author is found. Otherwise, return 'False'.
+    Return only 'True' or 'False', without any additional information.
+
+    Reference:
+    Title: {ref.title}
+    Author: {ref.first_author_family_name}
+    """.format(ref=ref)
+
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    google_search_tool = Tool(google_search=GoogleSearch())
+    response = client.models.generate_content(
+        model='gemini-2.0-flash',
+        contents=prompt,
+        config={
+            'tools': [google_search_tool],
+            # 'temperature': 0,
+        },
+    )
+
+    answer = response.candidates[0].content.parts[0].text
+    answer = normalize_title(answer)
+    if answer.startswith('true') or answer.endswith('true'):
         return True
     else:
-        return search_title_scholarly(title)
+        return False
+
+
+def search_title(ref: ReferenceExtraction) -> bool:
+    """Searches for a title using Crossref, then Scholarly if Crossref fails."""
+    if ref.type == "non_academic_website":
+        return search_title_google(ref)
+    else:
+        if search_title_crossref(ref.title):
+            return True
+        else:
+            return search_title_scholarly(ref.title)
 
 
 # --- Main Workflow ---
 
-def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
+def veriexcite(pdf_path: str) -> Tuple[int, int, List[str]]:
     # 1. Extract text from PDF and find bibliography
     full_text = extract_text_from_pdf(pdf_path)
     bib_text = extract_bibliography_section(full_text)
@@ -159,16 +194,11 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
     # print(f"Found {len(references)} references.")
 
     # 3. Verify each reference
-    count_verified, count_warning, count_skipped = 0, 0, 0
+    count_verified, count_warning = 0, 0
     list_warning = []
 
     for idx, ref in enumerate(references):
-        if ref.type == "non_academic_website":
-            count_skipped += 1
-            continue
-
-        # print(f"Reference {idx + 1}: {ref}")
-        result = search_title(ref.title)
+        result = search_title(ref)
 
         if result:
             # print("Reference verified.")
@@ -177,7 +207,7 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, int, List[str]]:
             # print("WARNING: This reference may be fabricated or AI-generated.")
             count_warning += 1
             list_warning.append(ref.normalised_input_bibliography)
-    return count_verified, count_warning, count_skipped, list_warning
+    return count_verified, count_warning, list_warning
 
 
 def process_folder(folder_path: str) -> None:
@@ -189,15 +219,14 @@ def process_folder(folder_path: str) -> None:
     for pdf_file in pdf_files:
         pdf_path = os.path.join(folder_path, pdf_file)
         print(f"Checking file: {pdf_file}")
-        count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
-        print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
+        count_verified, count_warning, list_warning = veriexcite(pdf_path)
+        print(f"{count_verified} references verified, {count_warning} warnings.")
         if count_warning > 0:
             print("WARNING LIST:")
             for warning in list_warning:
                 print(warning)
         print("--------------------------------------------------")
-        results.append({"File": pdf_file, "Found References": count_verified + count_warning + count_skipped,
-                        "Skipped website": count_skipped, "Verified": count_verified,
+        results.append({"File": pdf_file, "Found References": count_verified + count_warning, "Verified": count_verified,
                         "Warnings": count_warning, "Warning List": list_warning})
         pd.DataFrame(results).to_csv('VeriCite results.csv', index=False)
     print("Results saved to VeriCite results.csv")
