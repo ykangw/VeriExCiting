@@ -100,39 +100,51 @@ def normalize_title(title: str) -> str:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_scholarly(title: str) -> bool:
+def search_title_scholarly(ref: ReferenceExtraction) -> bool:
     """Searches for a title using scholarly, with error handling and retries."""
     try:
-        search_results = scholarly.search_pubs(title)
+        search_results = scholarly.search_pubs(ref.title)
         result = next(search_results, None)  # Safely get the first result, or None
-        if result and 'bib' in result and 'title' in result['bib']:
-            return normalize_title(result['bib']['title']) == normalize_title(title)
+        normalized_input_title = normalize_title(ref.title)
+
+        # Check if the first author's family name and title match
+        if result and 'bib' in result and 'author' in result['bib'] and 'title' in result['bib']:
+            if result['bib']['author'][0].split()[-1] == ref.first_author_family_name:
+                normalized_item_title = normalize_title(result['bib']['title'])
+                if normalized_item_title == normalized_input_title:
+                    return True  # Exact match
+                if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
+                    return True  # Partial match (more robust)
         return False  # No result, or missing title
     except Exception as e:
-        logging.warning(f"Scholarly search failed for title '{title}': {e}")
+        logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
         return False
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_crossref(title: str) -> bool:
+def search_title_crossref(ref: ReferenceExtraction) -> bool:
     """Searches for a title using the Crossref API, with retries and more robust matching."""
-    params = {'query.title': title, 'rows': 5}  # Increased rows
+    # TODO: check DOI using item['DOI'] == ref.DOI
+    params = {'query.title': ref.title, 'rows': 5}  # Increased rows
     response = requests.get("https://api.crossref.org/works", params=params)
 
     if response.status_code == 200:
         items = response.json().get('message', {}).get('items', [])
-        normalized_input_title = normalize_title(title)
+        normalized_input_title = normalize_title(ref.title)
 
         for item in items:
-            if 'title' in item and item['title']:
-                item_title = item['title'][0]
-                normalized_item_title = normalize_title(item_title)
-                if normalized_item_title == normalized_input_title:
-                    return True  # Exact match
+            # Check if the first author's family name matches
+            if 'author' in item and item['author'] and 'family' in item['author'][0]:
+                if ref.first_author_family_name == item['author'][0]['family']:
 
-                #  Partial match (more robust)
-                if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                    return True
+                    # Check if the title matches
+                    if 'title' in item and item['title']:
+                        item_title = item['title'][0]
+                        normalized_item_title = normalize_title(item_title)
+                        if normalized_item_title == normalized_input_title:
+                            return True  # Exact match
+                        if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
+                            return True  #  Partial match (more robust)
         return False  # No match found
     else:
         logging.warning(f"Crossref API request failed with status code: {response.status_code}")
@@ -175,10 +187,10 @@ def search_title(ref: ReferenceExtraction) -> bool:
     if ref.type == "non_academic_website":
         return search_title_google(ref)
     else:
-        if search_title_crossref(ref.title):
+        if search_title_crossref(ref):
             return True
         else:
-            return search_title_scholarly(ref.title)
+            return search_title_scholarly(ref)
 
 
 # --- Main Workflow ---
@@ -240,8 +252,8 @@ if __name__ == "__main__":
 
     ''' Example usage #1: check a single PDF file '''
     # pdf_path = "path/to/your/paper.pdf"
-    # count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
-    # print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
+    # count_verified, count_warning, list_warning = veriexcite(pdf_path)
+    # print(f"{count_verified} references verified, {count_warning} warnings.")
     #
     # if count_warning > 0:
     #     print("Warning List:")

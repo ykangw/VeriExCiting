@@ -45,13 +45,14 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
     for idx, ref in enumerate(references):
         status = "Pending"
         results.append({
+            "Index": idx,
             "First Author": ref.first_author_family_name,
             "Year": str(ref.year),
             "Title": ref.title,
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
             "Reference Text": ref.normalised_input_bibliography,
-            "Status": status
+            "Status": status,
         })
 
     df = pd.DataFrame(results)
@@ -67,7 +68,7 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
     progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
 
     for index, row in df.iterrows():
-        is_verified = search_title(row["Title"])
+        is_verified = search_title(references[index])
         if is_verified:
             df.loc[index, "Status"] = "Verified"
             verified_count += 1
