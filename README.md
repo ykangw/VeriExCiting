@@ -12,7 +12,7 @@ For quick and easy verification, use our web app: [https://veriexcite.streamlit.
 
 The rise of powerful LLMs has brought with it the potential for generating realistic-looking, yet entirely fabricated, academic references. While tools like ZeroGPT attempt to detect LLM-generated text, they rely on "black box" deep learning methods, which are prone to both false positives and false negatives, making them unreliable for definitive judgments. However, the presence of fabricated references within a manuscript provides *concrete* evidence that (at least part) of the text may be LLM-generated. **VeriExCite** focuses on this crucial aspect of academic integrity.  It helps academics, teaching assistants, and researchers quickly identify potentially problematic citations.
 
-This flowchart illustrates the VeriExCite process: ![VeriExCite Flowchart](/Users/yk/Documents/GitHub/VeriExCiting/images/flowchart.drawio.png) 
+This flowchart illustrates the VeriExCite process: ![VeriExCite Flowchart](images/flowchart.drawio.png) 
 
 ## Features
 
