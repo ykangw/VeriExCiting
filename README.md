@@ -44,7 +44,7 @@ You can also run VeriExCite locally with Python.
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/AdamZhou3/VeriExciting.git
+git clone https://github.com/ykangw/VeriExCiting.git
 cd VeriExciting
 ```
 
