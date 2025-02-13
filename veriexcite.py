@@ -240,8 +240,8 @@ if __name__ == "__main__":
 
     ''' Example usage #1: check a single PDF file '''
     # pdf_path = "path/to/your/paper.pdf"
-    # count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
-    # print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
+    # count_verified, count_warning, list_warning = veriexcite(pdf_path)
+    # print(f"{count_verified} references verified, {count_warning} warnings.")
     #
     # if count_warning > 0:
     #     print("Warning List:")

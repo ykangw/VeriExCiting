@@ -16,7 +16,7 @@ The rise of powerful LLMs has brought with it the potential for generating reali
     *   Checks references against Crossref and Google Scholar.
     *   Identifies potentially fabricated citations.
 *   **Reporting:**
-    *   Provides a summary of verified, skipped (e.g., non-academic references, such as a government website or a dataset), and potentially fabricated references.
+    *   Provides a summary of verified and potentially fabricated references.
     *   Outputs results to a CSV file for easy analysis.
 *  **Folder Processing:** Processes all PDF files in a directory in a single run, suitable for academics and teaching assistants in marking scenarios.
 *  **Privacy-Conscious:** Only the bibliography section of the PDF is sent to the Google Gemini API. This is crucial for complying with university policies that often prohibit uploading student work (which students hold copyright for) to third-party LLM services. The full text of the paper *is not* uploaded.
@@ -59,9 +59,9 @@ pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-
 from veriexcite import veriexcite
 
 pdf_path = "path/to/your/paper.pdf"
-count_verified, count_warning, count_skipped, list_warning = veriexcite(pdf_path)
+count_verified, count_warning, list_warning = veriexcite(pdf_path)
 
-print(f"{count_verified} references verified, {count_warning} warnings, {count_skipped} skipped.")
+print(f"{count_verified} references verified, {count_warning} warnings.")
 
 if count_warning > 0:
     print("Warning List:")
@@ -82,8 +82,7 @@ This creates `VeriCite results.csv` file in the current directory.
 ## Interpreting Results
 
 *   **Found References:** The total number of references extracted from the bibliography section of the PDF.
-*   **Skipped website:** Websites are skipped because they often lack the structured metadata needed for reliable verification.
-*   **Verified:** References that were successfully matched in Crossref or Google Scholar.
+*   **Verified:** References that were successfully matched in Crossref or Google Scholar (academic references), and Google Search (non-academic websites).
 *   **Warnings:** References that could *not* be verified. 
 *   **Warning List:** The raw text of the unverified references. 
 
