@@ -47,12 +47,15 @@ pip install PyPDF2 pydantic requests pandas unidecode scholarly tenacity google-
 **Set Google Gemini API Key:**
 
 *   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free with 1500 requests per day!
-*   Set your API key to the `GOOGLE_API_KEY` variable in the code. 
+*   Set your API key with `set_google_api_key` function. 
 
 **Single PDF File**
 
 ```python
-from veriexcite import veriexcite
+from veriexcite import set_google_api_key, veriexcite
+
+GOOGLE_API_KEY = "YOUR_API_KEY"
+set_google_api_key(GOOGLE_API_KEY)
 
 pdf_path = "path/to/your/paper.pdf"
 count_verified, count_warning, list_warning = veriexcite(pdf_path)
@@ -68,7 +71,10 @@ if count_warning > 0:
 **Process a Folder of PDFs**
 
 ```python
-from veriexcite import process_folder
+from veriexcite import set_google_api_key, process_folder
+
+GOOGLE_API_KEY = "YOUR_API_KEY"
+set_google_api_key(GOOGLE_API_KEY)
 
 folder_path = "path/to/your/pdf/folder"
 process_folder(folder_path)
