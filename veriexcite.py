@@ -54,6 +54,7 @@ class ReferenceExtraction(BaseModel):
     title: str
     first_author_family_name: str
     DOI: str
+    URL: str
     year: int
     type: str
     normalised_input_bibliography: str
@@ -66,10 +67,11 @@ def split_references(bib_text):
     1. Normalisation: Fix spacing errors, line breaks, and punctuation.
     2. Extraction: For each reference, extract:
     - Title (full title case)
-    - first author's family name
+    - first author's family name (If the author is an organization, use the organization name)
     - DOI (include if explicitly stated; otherwise leave blank)
+    - URL (include if explicitly stated; otherwise leave blank)
     - Year (4-digit publication year)
-    - Type (journal_article, conference_paper, book, book_chapter, OR non_academic_website)
+    - Type (journal_article, conference_paper, book, book_chapter, OR non_academic_website. If the author is not a human but an organization, select non_academic_website)
     - Normalised input bibliography (correct format, in one line)\n\n
     """
 

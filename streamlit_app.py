@@ -51,12 +51,13 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
             "Title": ref.title,
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
+            "URL": ref.URL,
             "Reference Text": ref.normalised_input_bibliography,
             "Status": status,
         })
 
     df = pd.DataFrame(results)
-    df_display = pd.concat([df[['Title', 'First Author', 'Year', 'Type']],
+    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL']],
                             df['DOI'].apply(lambda x: f'https://doi.org/{x}' if x and not x.startswith('http') else x),
                             df['Status'].map(status_dict)], axis=1)
     placeholder.dataframe(df_display, use_container_width=True,
@@ -78,7 +79,7 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
 
         # add emoji to the status column
         # add a link to the DOI
-        df_display = pd.concat([df[['Title', 'First Author', 'Year', 'Type']],
+        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL']],
                                 df['DOI'].apply(lambda x: f'https://doi.org/{x}' if x and not x.startswith('http') else x),
                                 df['Status'].map(status_dict)], axis=1)
         placeholder.dataframe(df_display, use_container_width=True,
