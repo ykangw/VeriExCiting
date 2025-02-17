@@ -11,6 +11,7 @@ from typing import List, Tuple, Dict
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
+from bs4 import BeautifulSoup
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
@@ -153,6 +154,40 @@ def search_title_crossref(ref: ReferenceExtraction) -> bool:
     return False
 
 
+def verify_url(ref: ReferenceExtraction) -> bool:
+    """
+    Verifies if the title on the webpage at the given URL matches the reference title.
+    """
+    if not ref.URL:
+        return False
+
+    try:
+        response = requests.get(ref.URL, timeout=5)  # Set a timeout
+        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        soup = BeautifulSoup(response.content, 'html.parser')
+        title_tag = soup.find('title')
+
+        if title_tag:
+            webpage_title = title_tag.text.strip()
+            normalized_webpage_title = normalize_title(webpage_title)
+            normalized_input_title = normalize_title(ref.title)
+
+            if normalized_webpage_title == normalized_input_title:
+                return True
+            elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
+                return True
+        else:
+            logging.warning(f"No <title> tag found at URL: {ref.URL}")
+            return search_title_google(ref)
+
+    except requests.exceptions.RequestException as e:
+        logging.warning(f"Error accessing URL {ref.URL}: {e}")
+        return search_title_google(ref)  # Or consider raising the exception if you want to halt execution on URL errors.
+    except Exception as e:
+        logging.warning(f"Error processing URL {ref.URL}: {e}")
+        return search_title_google(ref)
+
+
 def search_title_google(ref: ReferenceExtraction) -> bool:
 
     prompt = """
@@ -187,7 +222,7 @@ def search_title_google(ref: ReferenceExtraction) -> bool:
 def search_title(ref: ReferenceExtraction) -> bool:
     """Searches for a title using Crossref, then Scholarly if Crossref fails."""
     if ref.type == "non_academic_website":
-        return search_title_google(ref)
+        return verify_url(ref)
     else:
         if search_title_crossref(ref):
             return True
