@@ -51,6 +51,7 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
             "URL": ref.URL,
+            "Raw Text": ref.normalised_input_bibliography,
             "Status": status,
         })
 
