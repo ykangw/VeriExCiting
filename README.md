@@ -75,7 +75,7 @@ print(f"{count_verified} references verified, {count_warning} warnings.")
 if count_warning > 0:
     print("Warning List:")
     for item in list_warning:
-      print(item)
+        print(item)
 ```
 
 **Process a Folder of PDFs**
