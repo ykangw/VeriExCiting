@@ -58,9 +58,11 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
     df = pd.DataFrame(results)
 
     # if URL is empty, and DOI is not empty: if DOI start wih https://, fill url with doi. Else, fill url with doi.org link
-    df['URL'] = df['URL'].fillna(df['DOI'].apply(
-        lambda x: x if pd.notna(x) and x.startswith('https://') else f'https://doi.org/{x}' if pd.notna(x) else x))
-
+    df['URL'] = df.apply(
+        lambda x: x['DOI'] if pd.notna(x['DOI']) and (pd.isna(x['URL']) or x['URL'] == '') and x['DOI'].startswith(
+            'https://') else f'https://doi.org/{x["DOI"]}' if pd.notna(x['DOI']) and (
+                    pd.isna(x['URL']) or x['URL'] == '') else x['URL'], axis=1)
+    
     column_config = {
         "Index": st.column_config.TextColumn(width=5),
         "First Author": st.column_config.TextColumn(
