@@ -57,12 +57,11 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
         })
 
     df = pd.DataFrame(results)
-    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL']],
-                            df['DOI'].apply(lambda x: f'https://doi.org/{x}' if x and not x.startswith('http') else x),
+    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'DOI']],
                             df['Status'].map(status_dict)], axis=1)
     placeholder.dataframe(df_display, use_container_width=True,
                           column_config={
-                              "DOI": st.column_config.LinkColumn()
+                              "URL": st.column_config.LinkColumn()
                           })
     verified_count = 0
     warning_count = 0
@@ -79,12 +78,11 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
 
         # add emoji to the status column
         # add a link to the DOI
-        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL']],
-                                df['DOI'].apply(lambda x: f'https://doi.org/{x}' if x and not x.startswith('http') else x),
+        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'DOI']],
                                 df['Status'].map(status_dict)], axis=1)
         placeholder.dataframe(df_display, use_container_width=True,
                               column_config={
-                                  "DOI": st.column_config.LinkColumn()
+                                  "URL": st.column_config.LinkColumn()
                               })
 
         progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
