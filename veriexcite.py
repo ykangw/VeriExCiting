@@ -203,7 +203,7 @@ def search_title_google(ref: ReferenceExtraction) -> bool:
     client = genai.Client(api_key=GOOGLE_API_KEY)
     google_search_tool = Tool(google_search=GoogleSearch())
     response = client.models.generate_content(
-        model='gemini-2.0-flash-lite-preview-02-05',
+        model='gemini-2.0-flash',
         contents=prompt,
         config={
             'tools': [google_search_tool],
