@@ -96,29 +96,13 @@ def main():
                        menu_items={
                            "About": "This is a tool to verify citations in academic papers. View the source code on [GitHub](https://github.com/ykangw/VeriExCiting)."})
 
-    # Create three columns: sidebar, divider, and main
-    sidebar_col, divider_col, main_col = st.columns([1, 0.01, 3])  # Added tiny middle column for divider
+    st.title("VeriExCite: Verify Existing Citations")
+    st.write(
+        "This tool helps verify the existence of citations in academic papers (PDF format). "
+        "It extracts the bibliography, parses references, and checks their validity."
+    )
 
-    # --- Main Area (Right) ---
-    with main_col:
-        st.title("VeriExCite: Verify Existing Citations")
-        st.write(
-            "This tool helps verify the existence of citations in academic papers (PDF format). "
-            "It extracts the bibliography, parses references, and checks their validity."
-        )
-
-    # --- Divider (Middle) ---
-    with divider_col:
-        # Create a vertical line using markdown
-        st.markdown(
-            """
-            <div style="border-left: 2px solid #e6e6e6; height: 80vh; margin: 0 auto;"></div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    # --- Sidebar (Left) ---
-    with sidebar_col:
+    with st.sidebar:
         st.header("Input")
         pdf_files = st.file_uploader("Upload one or more PDF files", type="pdf", accept_multiple_files=True)
 
@@ -139,34 +123,33 @@ def main():
                 st.warning("Please enter a Google Gemini API key or select 'Use developer's API key'.")
                 return
 
-            # --- Main Area (Right) ---
-            with main_col:
-                    try:
-                        set_google_api_key(api_key)
-                        all_results = []
 
-                        for pdf_file in pdf_files:
-                            subheader = st.subheader(f"Processing: {pdf_file.name}")
-                            text = extract_text_from_pdf(pdf_file)
-                            results_df = process_and_verify(text)
-                            results_df['Source File'] = pdf_file.name
-                            all_results.append(results_df)
-                            subheader.subheader(f"Completed: {pdf_file.name}")
+    try:
+        set_google_api_key(api_key)
+        all_results = []
 
-                        if all_results:
-                            combined_results = pd.concat(all_results, ignore_index=True)
-                            csv = combined_results.to_csv(index=False).encode('utf-8')
-                            st.download_button(
-                                label="Download All Results as CSV",
-                                data=csv,
-                                file_name='VeriCite_results.csv',
-                                mime='text/csv',
-                            )
+        for pdf_file in pdf_files:
+            subheader = st.subheader(f"Processing: {pdf_file.name}")
+            text = extract_text_from_pdf(pdf_file)
+            results_df = process_and_verify(text)
+            results_df['Source File'] = pdf_file.name
+            all_results.append(results_df)
+            subheader.subheader(f"Completed: {pdf_file.name}")
 
-                    except ValueError as ve:
-                        st.error(str(ve))
-                    except Exception as e:
-                        st.error(f"An error occurred: {e}")
+        if all_results:
+            combined_results = pd.concat(all_results, ignore_index=True)
+            csv = combined_results.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="Download All Results as CSV",
+                data=csv,
+                file_name='VeriCite_results.csv',
+                mime='text/csv',
+            )
+
+    except ValueError as ve:
+        st.error(str(ve))
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
 
 
 if __name__ == "__main__":
