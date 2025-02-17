@@ -23,7 +23,7 @@ def extract_text_from_pdf(pdf_file: st.runtime.uploaded_file_manager.UploadedFil
     return pdf_content
 
 
-def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works Cited"]) -> pd.DataFrame:
+def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Works Cited"]) -> pd.DataFrame:
     """Extracts, processes, and verifies references."""
     # Create containers in the main area
     progress_text = st.empty()
@@ -31,7 +31,6 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
     progress_text.text("Extracting bibliography ...")
 
     try:
-        bib_text = extract_bibliography_section(text, keywords)
         references = split_references(bib_text)
     except ValueError as e:
         st.error(str(e))
@@ -52,17 +51,32 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
             "URL": ref.URL,
-            "Reference Text": ref.normalised_input_bibliography,
             "Status": status,
         })
 
     df = pd.DataFrame(results)
-    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'DOI']],
-                            df['Status'].map(status_dict)], axis=1)
-    placeholder.dataframe(df_display, use_container_width=True,
-                          column_config={
-                              "URL": st.column_config.LinkColumn()
-                          })
+
+    # if URL is empty, and DOI is not empty: if DOI start wih https://, fill url with doi. Else, fill url with doi.org link
+    df['URL'] = df['URL'].fillna(df['DOI'].apply(
+        lambda x: x if pd.notna(x) and x.startswith('https://') else f'https://doi.org/{x}' if pd.notna(x) else x))
+
+    column_config = {
+        "Index": st.column_config.TextColumn(width=5),
+        "First Author": st.column_config.TextColumn(
+            help="First Author's last name, or organization"),
+        "Year": st.column_config.TextColumn(width=25),
+        "URL": st.column_config.LinkColumn(),
+        "Raw Text": st.column_config.TextColumn(
+            "Raw Reference Text",  # Display name
+            help="Hover for full text",  # Tooltip message
+            width="medium",  # Width of the column
+        )
+    }
+
+    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text']],
+                            df['Status'].map(status_dict)], axis=1)  # add emoji to the status column
+    placeholder.dataframe(df_display, use_container_width=True,column_config=column_config)
+
     verified_count = 0
     warning_count = 0
     progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
@@ -76,14 +90,9 @@ def process_and_verify(text: str, keywords=["Reference", "Bibliography", "Works 
             df.loc[index, "Status"] = "Warning"
             warning_count += 1
 
-        # add emoji to the status column
-        # add a link to the DOI
-        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'DOI']],
-                                df['Status'].map(status_dict)], axis=1)
-        placeholder.dataframe(df_display, use_container_width=True,
-                              column_config={
-                                  "URL": st.column_config.LinkColumn()
-                              })
+        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text']],
+                                df['Status'].map(status_dict)], axis=1)  # add emoji to the status column
+        placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
 
         progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
 
@@ -113,42 +122,46 @@ def main():
         else:
             api_key = st.text_input("Enter your Google Gemini API key:", type="password")
 
-        if st.button("Start Verification"):
-            if not pdf_files:
-                st.warning("Please upload at least one PDF file.")
-                return
+    if st.sidebar.button("Start Verification"):
+        if not pdf_files:
+            st.warning("Please upload at least one PDF file.")
+            return
 
-            if not api_key:
-                st.warning("Please enter a Google Gemini API key or select 'Use developer's API key'.")
-                return
+        if not api_key:
+            st.warning("Please enter a Google Gemini API key or select 'Use developer's API key'.")
+            return
 
+        try:
+            set_google_api_key(api_key)
+            all_results = []
 
-    try:
-        set_google_api_key(api_key)
-        all_results = []
+            for pdf_file in pdf_files:
+                subheader = st.subheader(f"Processing: {pdf_file.name}")
+                bib_text = extract_bibliography_section(extract_text_from_pdf(pdf_file))
 
-        for pdf_file in pdf_files:
-            subheader = st.subheader(f"Processing: {pdf_file.name}")
-            text = extract_text_from_pdf(pdf_file)
-            results_df = process_and_verify(text)
-            results_df['Source File'] = pdf_file.name
-            all_results.append(results_df)
-            subheader.subheader(f"Completed: {pdf_file.name}")
+                # Display extracted bibliography text with expander
+                with st.expander(f"Extracted Bibliography Text for {pdf_file.name}"):
+                    st.text_area("Extracted Text", bib_text, height=200)
 
-        if all_results:
-            combined_results = pd.concat(all_results, ignore_index=True)
-            csv = combined_results.to_csv(index=False).encode('utf-8')
-            st.download_button(
-                label="Download All Results as CSV",
-                data=csv,
-                file_name='VeriCite_results.csv',
-                mime='text/csv',
-            )
+                results_df = process_and_verify(bib_text)
+                results_df['Source File'] = pdf_file.name
+                all_results.append(results_df)
+                subheader.subheader(f"Completed: {pdf_file.name}")
 
-    except ValueError as ve:
-        st.error(str(ve))
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
+            if all_results:
+                combined_results = pd.concat(all_results, ignore_index=True)
+                csv = combined_results.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download All Results as CSV",
+                    data=csv,
+                    file_name='VeriCite_results.csv',
+                    mime='text/csv',
+                )
+
+        except ValueError as ve:
+            st.error(str(ve))
+        except Exception as e:
+            st.error(f"An error occurred: {e}")
 
 
 if __name__ == "__main__":

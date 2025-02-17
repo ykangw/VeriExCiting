@@ -61,6 +61,7 @@ class ReferenceExtraction(BaseModel):
     normalised_input_bibliography: str
 
 def split_references(bib_text):
+    """Splits the bibliography text into individual references using the Google Gemini API."""
 
     prompt = """
     Process a reference list extracted from a PDF, where formatting may be corrupted.  
@@ -189,6 +190,7 @@ def verify_url(ref: ReferenceExtraction) -> bool:
 
 
 def search_title_google(ref: ReferenceExtraction) -> bool:
+    """Searches for a title using Google Search, and match using a LLM model."""
 
     prompt = """
     Please search for the reference on Google, compare with research results, and determine if it is genuine.
@@ -260,6 +262,7 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, List[str]]:
 
 
 def process_folder(folder_path: str) -> None:
+    """Check all PDF files in a folder."""
     pdf_files = [f for f in os.listdir(folder_path) if f.endswith('.pdf')]
     pdf_files.sort()
     print(f"Found {len(pdf_files)} PDF files in the folder.")
