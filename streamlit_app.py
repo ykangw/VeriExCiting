@@ -64,11 +64,10 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
             'DOI'] != '' and (pd.isna(x['URL']) or x['URL'] == '') else x['URL'], axis=1)
 
     column_config = {
-        # "Index": st.column_config.TextColumn(width=5),
         "First Author": st.column_config.TextColumn(
             help="First Author's last name, or organization"),
-        # "Year": st.column_config.TextColumn(width=25),
-        "URL": st.column_config.LinkColumn(),
+        "Year": st.column_config.TextColumn(width="small"),
+        "URL": st.column_config.LinkColumn(width="medium"),
         "Raw Text": st.column_config.TextColumn(
             "Raw Reference Text",  # Display name
             help="Hover for full text",  # Tooltip message
