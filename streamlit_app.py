@@ -45,13 +45,13 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
         status = "Pending"
         results.append({
             "Index": idx,
-            "First Author": ref.first_author_family_name,
+            "First Author": ref.author,
             "Year": str(ref.year),
             "Title": ref.title,
             "Type": ref_type_dict.get(ref.type, ref.type),
             "DOI": ref.DOI,
             "URL": ref.URL,
-            "Raw Text": ref.normalised_input_bibliography,
+            "Raw Text": ref.bib,
             "Status": status,
         })
 

@@ -53,12 +53,12 @@ def extract_bibliography_section(text: str, keywords: List[str] = ["Reference", 
 # --- Step 2: Split the bibliography text into individual references ---
 class ReferenceExtraction(BaseModel):
     title: str
-    first_author_family_name: str
+    author: str
     DOI: str
     URL: str
     year: int
     type: str
-    normalised_input_bibliography: str
+    bib: str
 
 def split_references(bib_text):
     """Splits the bibliography text into individual references using the Google Gemini API."""
@@ -69,12 +69,12 @@ def split_references(bib_text):
     1. Normalisation: Fix spacing errors, line breaks, and punctuation.
     2. Extraction: For each reference, extract:
     - Title (full title case)
-    - first author's family name (If the author is an organization, use the organization name)
+    - Author: First author's family name (If the author is an organization, use the organization name)
     - DOI (include if explicitly stated; otherwise leave blank)
     - URL (include if explicitly stated; otherwise leave blank)
     - Year (4-digit publication year)
     - Type (journal_article, conference_paper, book, book_chapter, OR non_academic_website. If the author is not a human but an organization, select non_academic_website)
-    - Normalised input bibliography (correct format, in one line)\n\n
+    - Bib: Normalised input bibliography (correct format, in one line)\n\n
     """
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -113,7 +113,7 @@ def search_title_scholarly(ref: ReferenceExtraction) -> bool:
 
         # Check if the first author's family name and title match
         if result and 'bib' in result and 'author' in result['bib'] and 'title' in result['bib']:
-            if result['bib']['author'][0].split()[-1] == ref.first_author_family_name:
+            if result['bib']['author'][0].split()[-1] == ref.author:
                 normalized_item_title = normalize_title(result['bib']['title'])
                 if normalized_item_title == normalized_input_title:
                     return True  # Exact match
@@ -139,7 +139,7 @@ def search_title_crossref(ref: ReferenceExtraction) -> bool:
         for item in items:
             # Check if the first author's family name matches
             if 'author' in item and item['author'] and 'family' in item['author'][0]:
-                if ref.first_author_family_name == item['author'][0]['family']:
+                if ref.author == item['author'][0]['family']:
 
                     # Check if the title matches
                     if 'title' in item and item['title']:
@@ -196,10 +196,6 @@ def search_title_google(ref: ReferenceExtraction) -> bool:
     Please search for the reference on Google, compare with research results, and determine if it is genuine.
     Return 'True' only if a website with the the exact title and author is found. Otherwise, return 'False'.
     Return only 'True' or 'False', without any additional information.
-
-    Reference:
-    Title: {ref.title}
-    Author: {ref.first_author_family_name}
     """.format(ref=ref)
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
@@ -257,7 +253,7 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, List[str]]:
         else:
             # print("WARNING: This reference may be fabricated or AI-generated.")
             count_warning += 1
-            list_warning.append(ref.normalised_input_bibliography)
+            list_warning.append(ref.bib)
     return count_verified, count_warning, list_warning
 
 
