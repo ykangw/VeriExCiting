@@ -1,6 +1,6 @@
 # VeriExCite: Verify Existing Citations
 
-[![Python Version](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Python Version](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 **VeriExCite** is a Python tool designed to help you verify the existence of citations in academic papers (PDF format). It extracts the bibliography section from a PDF, parses individual references, and then checks their validity against Crossref, Google Scholar, and Google Search.
 
@@ -17,10 +17,10 @@ This flowchart illustrates the VeriExCite process: ![VeriExCite Flowchart](image
 ## Features
 
 *   **Extraction:** Extracts the bibliography section from PDF documents.
-*   **Parsing:** Uses Google Gemini API to parse references into structured data (title, authors, DOI, type). 
+*   **Parsing:** Uses Google Gemini API to parse references into structured data (title, authors, DOI, type, etc.) 
 *   **Verification:**
     *   Checks academic references against Crossref and Google Scholar.
-    *   Check website reference using URL and Google Search. 
+    *   Checks website references using their URL and Google Search. 
     *   Identifies potentially fabricated citations.
 *   **Reporting:**
     *   Provides a summary of verified and potentially fabricated references.
@@ -57,7 +57,7 @@ streamlit run streamlit_app.py
 
 **Set Google Gemini API Key:**
 
-*   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free with 1500 requests per day!
+*   Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free up to 1500 requests per day!
 *   Set your API key with `set_google_api_key` function. 
 
 **Single PDF File**
@@ -90,12 +90,12 @@ set_google_api_key(GOOGLE_API_KEY)
 folder_path = "path/to/your/pdf/folder"
 process_folder(folder_path)
 ```
-This creates `VeriCite results.csv` file in the current directory.
+This creates a `VeriExCite results.csv` file in the current directory.
 
 ## Interpreting Results
 
 *   **Found References:** The total number of references extracted from the bibliography section of the PDF.
-*   **Verified:** References that were successfully matched in Crossref or Google Scholar (academic references), and Google Search (non-academic websites).
+*   **Verified:** References that were successfully matched in Crossref, Google Scholar (academic references), and Google Search (non-academic websites).
 *   **Warnings:** References that could *not* be verified. 
 *   **Warning List:** The raw text of the unverified references. 
 

@@ -280,8 +280,8 @@ def process_folder(folder_path: str) -> None:
         print("--------------------------------------------------")
         results.append({"File": pdf_file, "Found References": count_verified + count_warning, "Verified": count_verified,
                         "Warnings": count_warning, "Warning List": list_warning})
-        pd.DataFrame(results).to_csv('VeriCite results.csv', index=False)
-    print("Results saved to VeriCite results.csv")
+        pd.DataFrame(results).to_csv('VeriExCite results.csv', index=False)
+    print("Results saved to VeriExCite results.csv")
 
 
 if __name__ == "__main__":
