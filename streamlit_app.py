@@ -38,7 +38,7 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
 
     ref_type_dict = {"journal_article": "Journal Article", "conference_paper": "Conference Paper",
                      "book": "Book", "book_chapter": "Book Chapter", "non_academic_website": "Website"}
-    status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning"}
+    status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning", "Pending": "⏳Pending"}
 
     results = []
     for idx, ref in enumerate(references):
