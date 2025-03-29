@@ -161,7 +161,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
         # arXiv API endpoint
         url = "http://export.arxiv.org/api/query"
         
-        # Search for the title
+        # Search for the title - use double quotes around the title for exact match
         params = {
             'search_query': f'ti:"{ref.title}"',
             'max_results': 5
@@ -170,10 +170,18 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
         response = requests.get(url, params=params)
         
         if response.status_code == 200:
-            # Parse the XML response
-            soup = BeautifulSoup(response.content, 'xml')
+            # Parse the XML response - use 'lxml' parser for better compatibility
+            soup = BeautifulSoup(response.content, 'lxml-xml')
             entries = soup.find_all('entry')
             
+            if not entries:
+                # Try a more flexible search if no exact matches
+                params['search_query'] = f'all:{ref.title}'
+                response = requests.get(url, params=params)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'lxml-xml')
+                    entries = soup.find_all('entry')
+                
             if not entries:
                 return False
                 
@@ -185,27 +193,76 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
                     arxiv_title = title_tag.text.strip()
                     normalized_arxiv_title = normalize_title(arxiv_title)
                     
-                    # Check if titles match
+                    # More flexible title matching
                     if normalized_arxiv_title == normalized_input_title:
                         return True  # Exact match
                     if normalized_input_title in normalized_arxiv_title or normalized_arxiv_title in normalized_input_title:
                         return True  # Partial match
+                    if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 85:
+                        return True  # Fuzzy match with high similarity
                         
-                    # If titles are close, check authors
-                    author_tags = entry.find_all('author')
-                    for author_tag in author_tags:
-                        name_tag = author_tag.find('name')
-                        if name_tag:
-                            author_name = name_tag.text.strip()
-                            # Extract last name
-                            last_name = author_name.split()[-1]
-                            if last_name.lower() == ref.author.lower():
-                                return True  # Author match with similar title
+                    # Check authors if titles are somewhat similar
+                    if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 70:
+                        author_tags = entry.find_all('author')
+                        for author_tag in author_tags:
+                            name_tag = author_tag.find('name')
+                            if name_tag:
+                                author_name = name_tag.text.strip()
+                                # Extract last name
+                                last_name = author_name.split()[-1]
+                                if last_name.lower() == ref.author.lower():
+                                    return True  # Author match with similar title
                                 
         return False
         
     except Exception as e:
         logging.warning(f"arXiv search failed for title '{ref.title}': {e}")
+        return False
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_workshop_paper(ref: ReferenceExtraction) -> bool:
+    """Searches for workshop papers using Google Search directly."""
+    try:
+        # Check if it's likely a workshop paper from the reference text
+        workshop_indicators = ['workshop', 'symposium', 'proc.', 'proceedings']
+        is_likely_workshop = any(indicator in ref.bib.lower() for indicator in workshop_indicators)
+        
+        if not is_likely_workshop:
+            return False
+            
+        # Use Google search through the Google Gemini API with more specific prompt
+        prompt = f"""
+        Please search for this exact workshop paper and verify it exists:
+        Title: {ref.title}
+        Author: {ref.author}
+        Year: {ref.year}
+        
+        This paper appears to be from a workshop or symposium. Check conferences, workshops, 
+        and personal/university pages. Return 'True' only if you can find evidence this 
+        specific workshop paper exists (exact title and author match). Return 'False' otherwise.
+        Return only 'True' or 'False', without any additional explanation.
+        """
+
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        google_search_tool = Tool(google_search=GoogleSearch())
+        response = client.models.generate_content(
+            model='gemini-2.0-flash',
+            contents=prompt,
+            config={
+                'tools': [google_search_tool],
+                'temperature': 0,
+            },
+        )
+
+        answer = response.candidates[0].content.parts[0].text
+        answer = normalize_title(answer)
+        if answer.startswith('true') or answer.endswith('true'):
+            return True
+        else:
+            return False
+            
+    except Exception as e:
+        logging.warning(f"Workshop paper search failed for title '{ref.title}': {e}")
         return False
 
 def verify_url(ref: ReferenceExtraction) -> bool:
@@ -269,19 +326,29 @@ def search_title_google(ref: ReferenceExtraction) -> bool:
     else:
         return False
 
-
 def search_title(ref: ReferenceExtraction) -> bool:
-    """Searches for a title using Crossref, then Scholarly if Crossref fails."""
+    """Searches for a title using multiple methods."""
     if ref.type == "non_academic_website":
         return verify_url(ref)
     else:
+        # First try Crossref
         if search_title_crossref(ref):
             return True
-        elif search_title_arxiv(ref):  # Add arXiv check before Scholarly
+            
+        # For preprints, try arXiv specifically
+        if ref.type == "preprint" and search_title_arxiv(ref):
             return True
-        else:
-            return search_title_scholarly(ref)
-
+            
+        # For all academic papers, try arXiv anyway as a fallback
+        if search_title_arxiv(ref):
+            return True
+            
+        # Special check for workshop papers
+        if search_title_workshop_paper(ref):
+            return True
+            
+        # Fall back to Google Scholar
+        return search_title_scholarly(ref)
 
 # --- Main Workflow ---
 
