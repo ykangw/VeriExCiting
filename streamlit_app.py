@@ -36,7 +36,7 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
         st.error(str(e))
         return pd.DataFrame()
 
-    ref_type_dict = {"journal_article": "Journal Article", "conference_paper": "Conference Paper",
+    ref_type_dict = {"journal_article": "Journal Article", "preprint": "Preprint", "conference_paper": "Conference Paper",
                      "book": "Book", "book_chapter": "Book Chapter", "non_academic_website": "Website"}
     status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning", "Pending": "⏳Pending"}
 

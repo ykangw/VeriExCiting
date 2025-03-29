@@ -73,7 +73,7 @@ def split_references(bib_text):
     - DOI (include if explicitly stated; otherwise leave blank)
     - URL (include if explicitly stated; otherwise leave blank)
     - Year (4-digit publication year)
-    - Type (journal_article, conference_paper, book, book_chapter, OR non_academic_website. If the author is not a human but an organization, select non_academic_website)
+    - Type (journal_article, preprint, conference_paper, book, book_chapter, OR non_academic_website. If the author is not a human but an organization, select non_academic_website)
     - Bib: Normalised input bibliography (correct format, in one line)\n\n
     """
 
@@ -154,6 +154,59 @@ def search_title_crossref(ref: ReferenceExtraction) -> bool:
         logging.warning(f"Crossref API request failed with status code: {response.status_code}")
     return False
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_arxiv(ref: ReferenceExtraction) -> bool:
+    """Searches for a title in arXiv, with error handling and retries."""
+    try:
+        # arXiv API endpoint
+        url = "http://export.arxiv.org/api/query"
+        
+        # Search for the title
+        params = {
+            'search_query': f'ti:"{ref.title}"',
+            'max_results': 5
+        }
+        
+        response = requests.get(url, params=params)
+        
+        if response.status_code == 200:
+            # Parse the XML response
+            soup = BeautifulSoup(response.content, 'xml')
+            entries = soup.find_all('entry')
+            
+            if not entries:
+                return False
+                
+            normalized_input_title = normalize_title(ref.title)
+            
+            for entry in entries:
+                title_tag = entry.find('title')
+                if title_tag:
+                    arxiv_title = title_tag.text.strip()
+                    normalized_arxiv_title = normalize_title(arxiv_title)
+                    
+                    # Check if titles match
+                    if normalized_arxiv_title == normalized_input_title:
+                        return True  # Exact match
+                    if normalized_input_title in normalized_arxiv_title or normalized_arxiv_title in normalized_input_title:
+                        return True  # Partial match
+                        
+                    # If titles are close, check authors
+                    author_tags = entry.find_all('author')
+                    for author_tag in author_tags:
+                        name_tag = author_tag.find('name')
+                        if name_tag:
+                            author_name = name_tag.text.strip()
+                            # Extract last name
+                            last_name = author_name.split()[-1]
+                            if last_name.lower() == ref.author.lower():
+                                return True  # Author match with similar title
+                                
+        return False
+        
+    except Exception as e:
+        logging.warning(f"arXiv search failed for title '{ref.title}': {e}")
+        return False
 
 def verify_url(ref: ReferenceExtraction) -> bool:
     """
@@ -223,6 +276,8 @@ def search_title(ref: ReferenceExtraction) -> bool:
         return verify_url(ref)
     else:
         if search_title_crossref(ref):
+            return True
+        elif search_title_arxiv(ref):  # Add arXiv check before Scholarly
             return True
         else:
             return search_title_scholarly(ref)
