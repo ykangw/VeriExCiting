@@ -143,7 +143,7 @@ def main():
 
                 # Display extracted bibliography text with expander
                 with st.expander(f"Extracted Bibliography Text for {pdf_file.name}"):
-                    st.text_area("Extracted Text", bib_text, height=200)
+                    st.text_area("Extracted Text", bib_text, height=200, label_visibility="hidden")
 
                 results_df = process_and_verify(bib_text)
                 results_df['Source File'] = pdf_file.name
