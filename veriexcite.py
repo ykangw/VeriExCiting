@@ -12,6 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
 from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from bs4 import BeautifulSoup
+from rapidfuzz import fuzz
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
