@@ -10,7 +10,7 @@ import logging
 from typing import List, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
-from google.genai.types import Tool, GoogleSearch
+from google.genai.types import Tool, GoogleSearch, ThinkingConfig
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 
@@ -86,6 +86,7 @@ def split_references(bib_text):
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
             'temperature': 0,
+            'thinking_config': ThinkingConfig(thinking_budget=0),
         },
     )
 
