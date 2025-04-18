@@ -7,10 +7,10 @@ import re
 from unidecode import unidecode
 from scholarly import scholarly
 import logging
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
-from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
+from google.genai.types import Tool, GoogleSearch
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 
@@ -120,6 +120,8 @@ def search_title_scholarly(ref: ReferenceExtraction) -> bool:
                     return True  # Exact match
                 if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
                     return True  # Partial match (more robust)
+                if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
+                    return True  # Fuzzy match with high similarity
         return False  # No result, or missing title
     except Exception as e:
         logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
@@ -149,7 +151,9 @@ def search_title_crossref(ref: ReferenceExtraction) -> bool:
                         if normalized_item_title == normalized_input_title:
                             return True  # Exact match
                         if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                            return True  #  Partial match (more robust)
+                            return True  # Partial match (more robust)
+                        if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
+                            return True  # Fuzzy match with high similarity
         return False  # No match found
     else:
         logging.warning(f"Crossref API request failed with status code: {response.status_code}")
@@ -301,13 +305,16 @@ def verify_url(ref: ReferenceExtraction) -> bool:
 
 
 def search_title_google(ref: ReferenceExtraction) -> bool:
-    """Searches for a title using Google Search, and match using a LLM model."""
+    """Searches for a title using Google Search and match using a LLM model."""
 
     prompt = """
     Please search for the reference on Google, compare with research results, and determine if it is genuine.
     Return 'True' only if a website with the the exact title and author is found. Otherwise, return 'False'.
     Return only 'True' or 'False', without any additional information.
-    """.format(ref=ref)
+    
+    Author: {ref.author}
+    Title: {ref.title}
+    """
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
     google_search_tool = Tool(google_search=GoogleSearch())
