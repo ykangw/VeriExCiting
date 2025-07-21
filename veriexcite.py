@@ -80,7 +80,7 @@ def split_references(bib_text):
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
     response = client.models.generate_content(
-        model='gemini-2.5-flash-preview-04-17',
+        model='gemini-2.5-flash',
         contents=prompt + bib_text,
         config={
             'response_mime_type': 'application/json',
