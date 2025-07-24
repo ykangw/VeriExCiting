@@ -72,14 +72,18 @@ GOOGLE_API_KEY = "YOUR_API_KEY"
 set_google_api_key(GOOGLE_API_KEY)
 
 pdf_path = "path/to/your/paper.pdf"
-count_verified, count_warning, list_warning = veriexcite(pdf_path)
+count_verified, count_warning, list_warning, list_explanations = veriexcite(pdf_path)
 
-print(f"{count_verified} references verified, {count_warning} warnings.")
+print(f"{count_verified} references validated, {count_warning} warnings.")
 
 if count_warning > 0:
     print("Warning List:")
     for item in list_warning:
         print(item)
+
+print("\nExplanations:")
+for explanation in list_explanations:
+    print(explanation)
 ```
 
 **Process a Folder of PDFs**
@@ -94,18 +98,26 @@ folder_path = "path/to/your/pdf/folder"
 process_folder(folder_path)
 ```
 
-This creates a `VeriExCite results.csv` file in the current directory.
+This creates a `VeriExCite results.csv` file in the current directory, including explanations for each reference.
 
 ## Interpreting Results
 
 - **Found References:** The total number of references extracted from the bibliography section of the PDF.
-- **Verified:** References that were successfully matched in Crossref, Google Scholar, Arxiv (academic references), and Google Search (non-academic websites).
-- **Warnings:** References that could _not_ be verified.
-- **Warning List:** The raw text of the unverified references.
+- **Validated:** References that were successfully matched in Crossref, Google Scholar, Arxiv (academic references), and Google Search (non-academic websites). If a DOI is provided and matches, the reference is strongly validated. If a DOI is provided but does not match, the reference is flagged as **Invalid**.
+- **Invalid:** References that are explicitly flagged as incorrect, such as when a DOI is provided but does not match the Crossref record, or when author/title do not match authoritative sources.
+- **Not Found (unverified):** References that could _not_ be verified in any source.
+- **Warning List:** The raw text of the unverified or invalid references.
+- **Explanations:** For each reference, a detailed explanation is provided, indicating the reason for its status (e.g., "DOI does not match Crossref record", "Author and title match Google Scholar", etc.).
 
 > [!IMPORTANT]
 >
-> A "warning" from VeriExCite indicates suspicion. Manual verification is always required.
+> A "warning" or "invalid" from VeriExCite indicates suspicion. Manual verification is always required. The tool now provides detailed explanations for each reference, making it easier to understand why a reference was flagged.
+
+## Streamlit App Output
+
+The Streamlit app now displays:
+- **Status**: Shows one of ✅Validated, ❌Invalid, or ⚠️Not Found for each reference.
+- **Explanation**: Shows the reason for the status, such as DOI mismatch, author/title match, or not found in any source.
 
 ## Contributing
 
