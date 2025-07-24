@@ -132,7 +132,6 @@ def search_title_scholarly(ref: ReferenceExtraction) -> bool:
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_crossref(ref: ReferenceExtraction) -> bool:
     """Searches for a title using the Crossref API, with retries and more robust matching."""
-    # TODO: check DOI using item['DOI'] == ref.DOI
     params = {'query.title': ref.title, 'rows': 5}  # Increased rows
     response = requests.get("https://api.crossref.org/works", params=params)
 
@@ -141,6 +140,15 @@ def search_title_crossref(ref: ReferenceExtraction) -> bool:
         normalized_input_title = normalize_title(ref.title)
 
         for item in items:
+            # If DOI is provided in both reference and item, compare DOI first
+            ref_doi = ref.DOI.strip().lower() if ref.DOI else ''
+            item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
+            if ref_doi and item_doi:
+                if ref_doi == item_doi:
+                    continue  # DOI match, continue to check author and title
+                else:
+                    return False  # DOI provided but does not match
+            
             # Check if the first author's family name matches
             if 'author' in item and item['author'] and 'family' in item['author'][0]:
                 if ref.author == item['author'][0]['family']:
