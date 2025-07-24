@@ -13,6 +13,7 @@ from google import genai
 from google.genai.types import Tool, GoogleSearch, ThinkingConfig
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
+from enum import Enum
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
@@ -61,6 +62,15 @@ class ReferenceExtraction(BaseModel):
     type: str
     bib: str
 
+class ReferenceStatus(Enum):
+    VALIDATED = "validated"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+
+class ReferenceCheckResult(BaseModel):
+    status: ReferenceStatus
+    explanation: str
+
 def split_references(bib_text):
     """Splits the bibliography text into individual references using the Google Gemini API."""
 
@@ -106,7 +116,7 @@ def normalize_title(title: str) -> str:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_scholarly(ref: ReferenceExtraction) -> bool:
+def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using scholarly, with error handling and retries."""
     try:
         search_results = scholarly.search_pubs(ref.title)
@@ -118,58 +128,58 @@ def search_title_scholarly(ref: ReferenceExtraction) -> bool:
             if result['bib']['author'][0].split()[-1] == ref.author:
                 normalized_item_title = normalize_title(result['bib']['title'])
                 if normalized_item_title == normalized_input_title:
-                    return True  # Exact match
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (exact match).")
                 if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                    return True  # Partial match (more robust)
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (partial match).")
                 if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
-                    return True  # Fuzzy match with high similarity
-        return False  # No result, or missing title
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (fuzzy match).")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Google Scholar.")
     except Exception as e:
         logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
-        return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Google Scholar search failed: {e}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_crossref(ref: ReferenceExtraction) -> bool:
-    """Searches for a title using the Crossref API, with retries and more robust matching."""
+def search_title_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches for a title using the Crossref API, with retries and more robust matching. Returns ReferenceCheckResult."""
     params = {'query.title': ref.title, 'rows': 5}  # Increased rows
     response = requests.get("https://api.crossref.org/works", params=params)
 
     if response.status_code == 200:
         items = response.json().get('message', {}).get('items', [])
         normalized_input_title = normalize_title(ref.title)
-
         for item in items:
             # If DOI is provided in both reference and item, compare DOI first
             ref_doi = ref.DOI.strip().lower() if ref.DOI else ''
             item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
             if ref_doi and item_doi:
                 if ref_doi == item_doi:
-                    continue  # DOI match, continue to check author and title
+                    if 'author' in item and item['author'] and 'family' in item['author'][0] and ref.author == item['author'][0]['family']:
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author, title and DOI match Crossref record.")
+                    elif 'author' in item and item['author'] and 'family' in item['author'][0] and ref.author != item['author'][0]['family']:
+                        return ReferenceCheckResult(status=ReferenceStatus.INVALID, explanation="Author does not match Crossref record.")
                 else:
-                    return False  # DOI provided but does not match
-            
+                    return ReferenceCheckResult(status=ReferenceStatus.INVALID, explanation="DOI does not match Crossref record.")
             # Check if the first author's family name matches
             if 'author' in item and item['author'] and 'family' in item['author'][0]:
                 if ref.author == item['author'][0]['family']:
-
                     # Check if the title matches
                     if 'title' in item and item['title']:
                         item_title = item['title'][0]
                         normalized_item_title = normalize_title(item_title)
                         if normalized_item_title == normalized_input_title:
-                            return True  # Exact match
+                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (exact match).")
                         if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                            return True  # Partial match (more robust)
+                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (partial match).")
                         if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
-                            return True  # Fuzzy match with high similarity
-        return False  # No match found
+                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (fuzzy match).")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Crossref.")
     else:
         logging.warning(f"Crossref API request failed with status code: {response.status_code}")
-    return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Crossref API request failed with status code: {response.status_code}")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_arxiv(ref: ReferenceExtraction) -> bool:
+def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title in arXiv, with error handling and retries."""
     try:
         # arXiv API endpoint
@@ -197,7 +207,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
                     entries = soup.find_all('entry')
                 
             if not entries:
-                return False
+                return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
                 
             normalized_input_title = normalize_title(ref.title)
             
@@ -209,11 +219,11 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
                     
                     # More flexible title matching
                     if normalized_arxiv_title == normalized_input_title:
-                        return True  # Exact match
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (exact match).")
                     if normalized_input_title in normalized_arxiv_title or normalized_arxiv_title in normalized_input_title:
-                        return True  # Partial match
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (partial match).")
                     if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 85:
-                        return True  # Fuzzy match with high similarity
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (fuzzy match).")
                         
                     # Check authors if titles are somewhat similar
                     if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 70:
@@ -225,16 +235,16 @@ def search_title_arxiv(ref: ReferenceExtraction) -> bool:
                                 # Extract last name
                                 last_name = author_name.split()[-1]
                                 if last_name.lower() == ref.author.lower():
-                                    return True  # Author match with similar title
+                                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and similar title match in arXiv.")
                                 
-        return False
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
         
     except Exception as e:
         logging.warning(f"arXiv search failed for title '{ref.title}': {e}")
-        return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"arXiv search failed: {e}")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_workshop_paper(ref: ReferenceExtraction) -> bool:
+def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for workshop papers using Google Search directly."""
     try:
         # Check if it's likely a workshop paper from the reference text
@@ -242,7 +252,7 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> bool:
         is_likely_workshop = any(indicator in ref.bib.lower() for indicator in workshop_indicators)
         
         if not is_likely_workshop:
-            return False
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Not a workshop paper.")
             
         # Use Google search through the Google Gemini API with more specific prompt
         prompt = f"""
@@ -268,23 +278,22 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> bool:
             },
         )
 
-        answer = response.candidates[0].content.parts[0].text
-        answer = normalize_title(answer)
+        answer = normalize_title(response.candidates[0].content.parts[0].text)
         if answer.startswith('true') or answer.endswith('true'):
-            return True
+            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
         else:
-            return False
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Workshop paper not found via Google search.")
             
     except Exception as e:
         logging.warning(f"Workshop paper search failed for title '{ref.title}': {e}")
-        return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Workshop paper search failed: {e}")
 
-def verify_url(ref: ReferenceExtraction) -> bool:
+def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """
     Verifies if the title on the webpage at the given URL matches the reference title.
     """
     if not ref.URL:
-        return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No URL provided.")
 
     try:
         response = requests.get(ref.URL, timeout=5)  # Set a timeout
@@ -298,9 +307,9 @@ def verify_url(ref: ReferenceExtraction) -> bool:
             normalized_input_title = normalize_title(ref.title)
 
             if normalized_webpage_title == normalized_input_title:
-                return True
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (exact match).")
             elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
-                return True
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (partial match).")
         else:
             logging.warning(f"No <title> tag found at URL: {ref.URL}")
             return search_title_google(ref)
@@ -313,17 +322,15 @@ def verify_url(ref: ReferenceExtraction) -> bool:
         return search_title_google(ref)
 
 
-def search_title_google(ref: ReferenceExtraction) -> bool:
+def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using Google Search and match using a LLM model."""
 
-    prompt = """
-    Please search for the reference on Google, compare with research results, and determine if it is genuine.
-    Return 'True' only if a website with the the exact title and author is found. Otherwise, return 'False'.
-    Return only 'True' or 'False', without any additional information.
-    
-    Author: {ref.author}
-    Title: {ref.title}
-    """
+    prompt = f"""
+    Please search for the reference on Google, compare with research results, and determine if it is genuine.\n
+    Return 'True' only if a website with the the exact title and author is found. Otherwise, return 'False'.\n
+    Return only 'True' or 'False', without any additional information.\n\n
+    Author: {ref.author}\n
+    Title: {ref.title}\n"""
 
     client = genai.Client(api_key=GOOGLE_API_KEY)
     google_search_tool = Tool(google_search=GoogleSearch())
@@ -332,44 +339,54 @@ def search_title_google(ref: ReferenceExtraction) -> bool:
         contents=prompt,
         config={
             'tools': [google_search_tool],
-            # 'temperature': 0,
         },
     )
 
-    answer = response.candidates[0].content.parts[0].text
-    answer = normalize_title(answer)
+    answer = normalize_title(response.candidates[0].content.parts[0].text)
     if answer.startswith('true') or answer.endswith('true'):
-        return True
+        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")
     else:
-        return False
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Google search did not find matching reference.")
 
-def search_title(ref: ReferenceExtraction) -> bool:
+def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using multiple methods."""
     if ref.type == "non_academic_website":
         return verify_url(ref)
     else:
         # First try Crossref
-        if search_title_crossref(ref):
-            return True
-            
-        # For preprints, try arXiv specifically
-        if ref.type == "preprint" and search_title_arxiv(ref):
-            return True
-            
-        # For all academic papers, try arXiv anyway as a fallback
-        if search_title_arxiv(ref):
-            return True
-            
+        crossref_result = search_title_crossref(ref)
+        if crossref_result.status == ReferenceStatus.INVALID:
+            return crossref_result
+        if crossref_result.status == ReferenceStatus.VALIDATED:
+            return crossref_result
+        # For all academic papers, try arXiv as a fallback
+        arxiv_result = search_title_arxiv(ref)
+        if arxiv_result.status == ReferenceStatus.VALIDATED:
+            return arxiv_result
         # Special check for workshop papers
-        if search_title_workshop_paper(ref):
-            return True
-            
+        workshop_result = search_title_workshop_paper(ref)
+        if workshop_result.status == ReferenceStatus.VALIDATED:
+            return workshop_result
         # Fall back to Google Scholar
-        return search_title_scholarly(ref)
+        scholar_result = search_title_scholarly(ref)
+        if scholar_result.status == ReferenceStatus.VALIDATED:
+            return scholar_result
+        # If all fail, return the most informative NOT_FOUND
+        for result in [crossref_result, arxiv_result, workshop_result, scholar_result]:
+            if result.status == ReferenceStatus.NOT_FOUND:
+                return result
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No evidence found in any source.")
 
 # --- Main Workflow ---
 
-def veriexcite(pdf_path: str) -> Tuple[int, int, List[str]]:
+def veriexcite(pdf_path: str) -> Tuple[int, int, List[str], List[str]]:
+    """
+    Check references in a PDF. Returns:
+    - count_verified: number of validated references
+    - count_warning: number of warnings (invalid or not found)
+    - list_warning: list of bib entries with warnings
+    - list_explanations: list of explanations for each reference
+    """
     # 1. Extract text from PDF and find bibliography
     full_text = extract_text_from_pdf(pdf_path)
     bib_text = extract_bibliography_section(full_text)
@@ -382,19 +399,30 @@ def veriexcite(pdf_path: str) -> Tuple[int, int, List[str]]:
     # 3. Verify each reference
     count_verified, count_warning = 0, 0
     list_warning = []
+    list_explanations = []
 
     for idx, ref in enumerate(references):
         result = search_title(ref)
-
-        if result:
-            # print("Reference verified.")
+        list_explanations.append(f"Reference: {ref.bib}\nStatus: {result.status.value}\nExplanation: {result.explanation}\n")
+        if result.status == ReferenceStatus.VALIDATED:
             count_verified += 1
         else:
-            # print("WARNING: This reference may be fabricated or AI-generated.")
             count_warning += 1
             list_warning.append(ref.bib)
-    return count_verified, count_warning, list_warning
+    return count_verified, count_warning, list_warning, list_explanations
 
+def process_pdf_file(pdf_path: str) -> None:
+    """Check a single PDF file."""
+    count_verified, count_warning, list_warning, list_explanations = veriexcite(pdf_path)
+    print(f"{count_verified} references verified, {count_warning} warnings.")
+    if count_warning > 0:
+        print("\nWarning List:\n")
+        for item in list_warning:
+            print(item)
+    print("\nExplanation:\n")
+    for explanation in list_explanations:
+        print(explanation)
+    return count_verified, count_warning, list_warning, list_explanations
 
 def process_folder(folder_path: str) -> None:
     """Check all PDF files in a folder."""
@@ -406,15 +434,10 @@ def process_folder(folder_path: str) -> None:
     for pdf_file in pdf_files:
         pdf_path = os.path.join(folder_path, pdf_file)
         print(f"Checking file: {pdf_file}")
-        count_verified, count_warning, list_warning = veriexcite(pdf_path)
-        print(f"{count_verified} references verified, {count_warning} warnings.")
-        if count_warning > 0:
-            print("WARNING LIST:")
-            for warning in list_warning:
-                print(warning)
+        count_verified, count_warning, list_warning, list_explanations = process_pdf_file(pdf_path)
         print("--------------------------------------------------")
         results.append({"File": pdf_file, "Found References": count_verified + count_warning, "Verified": count_verified,
-                        "Warnings": count_warning, "Warning List": list_warning})
+                        "Warnings": count_warning, "Warning List": list_warning, "Explanation": list_explanations})
         pd.DataFrame(results).to_csv('VeriExCite results.csv', index=False)
     print("Results saved to VeriExCite results.csv")
 
@@ -427,13 +450,7 @@ if __name__ == "__main__":
 
     ''' Example usage #1: check a single PDF file '''
     # pdf_path = "path/to/your/paper.pdf"
-    # count_verified, count_warning, list_warning = veriexcite(pdf_path)
-    # print(f"{count_verified} references verified, {count_warning} warnings.")
-    #
-    # if count_warning > 0:
-    #     print("Warning List:")
-    #     for item in list_warning:
-    #         print(item)
+    # process_pdf_file(pdf_path)
 
     ''' Example usage #2: check all PDF files in a folder '''
     # Please replace the folder path to your directory containing the PDF files.

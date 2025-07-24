@@ -4,6 +4,7 @@ from veriexcite import (
     split_references,
     search_title,
     set_google_api_key,
+    ReferenceStatus,  # new import
 )
 import io
 import pandas as pd
@@ -38,11 +39,15 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
 
     ref_type_dict = {"journal_article": "Journal Article", "preprint": "Preprint", "conference_paper": "Conference Paper",
                      "book": "Book", "book_chapter": "Book Chapter", "non_academic_website": "Website"}
-    status_dict = {"Verified": "✅Verified", "Warning": "⚠️Warning", "Pending": "⏳Pending"}
+    status_emoji = {
+        "validated": "✅Validated",
+        "invalid": "❌Invalid",
+        "not_found": "⚠️Not Found",
+        "Pending": "⏳Pending"
+    }
 
     results = []
     for idx, ref in enumerate(references):
-        status = "Pending"
         results.append({
             "Index": idx,
             "First Author": ref.author,
@@ -52,7 +57,8 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
             "DOI": ref.DOI,
             "URL": ref.URL,
             "Raw Text": ref.bib,
-            "Status": status,
+            "Status": "Pending",
+            "Explanation": "Pending"
         })
 
     df = pd.DataFrame(results)
@@ -72,31 +78,35 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
             "Raw Reference Text",  # Display name
             help="Hover for full text",  # Tooltip message
             width="medium",  # Width of the column
+        ),
+        "Status": st.column_config.TextColumn(
+            help="Reference validation status"
+        ),
+        "Explanation": st.column_config.TextColumn(
+            help="Explanation of the validation result"
         )
     }
 
-    df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text']],
-                            df['Status'].map(status_dict)], axis=1)  # add emoji to the status column
-    placeholder.dataframe(df_display, use_container_width=True,column_config=column_config)
+    df_display = df[[
+        'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']]
+    placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
 
     verified_count = 0
     warning_count = 0
-    progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
+    progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
 
     for index, row in df.iterrows():
-        is_verified = search_title(references[index])
-        if is_verified:
-            df.loc[index, "Status"] = "Verified"
+        result = search_title(references[index])
+        df.loc[index, "Status"] = status_emoji.get(result.status.value, result.status.value)
+        df.loc[index, "Explanation"] = result.explanation
+        if result.status == ReferenceStatus.VALIDATED:
             verified_count += 1
         else:
-            df.loc[index, "Status"] = "Warning"
             warning_count += 1
-
-        df_display = pd.concat([df[['First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text']],
-                                df['Status'].map(status_dict)], axis=1)  # add emoji to the status column
+        df_display = df[[
+            'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']]
         placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
-
-        progress_text.text(f"Verified: {verified_count} | Warnings: {warning_count}")
+        progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
 
     return df
 
