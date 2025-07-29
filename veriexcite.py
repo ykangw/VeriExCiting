@@ -37,7 +37,28 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     return text
 
 
-def extract_bibliography_section(text: str, keywords: List[str] = ["Reference", "Bibliography", "Works Cited"]) -> str:
+def extract_bibliography_section(text: str, keywords: List[str] = [
+    # English
+    "Reference", "References", "Bibliography", "Works Cited",
+    # Chinese
+    "参考文献", "參考文獻",
+    # Japanese
+    "参考資料",
+    # French
+    "Références", "Bibliographie",
+    # German
+    "Literaturverzeichnis", "Quellenverzeichnis",
+    # Spanish
+    "Referencias", "Bibliografía",
+    # Russian
+    "Список литературы",
+    # Italian
+    "Riferimenti", "Bibliografia",
+    # Portuguese
+    "Referências", "Bibliografia",
+    # Korean
+    "참고문헌"
+]) -> str:
     """
     Find the last occurrence of any keyword from 'keywords'
     and return the text from that point onward.
