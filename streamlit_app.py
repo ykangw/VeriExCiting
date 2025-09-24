@@ -132,7 +132,7 @@ def main():
             "**OR** paste reference text",
             value="",
             placeholder="Paste the bibliography section or references here ...",
-            height=60,
+            height=68,
             # help="Paste the bibliography section or any text containing references. "
         )
 
