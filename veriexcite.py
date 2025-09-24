@@ -234,9 +234,11 @@ def search_title_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
         if doi_result.status == ReferenceStatus.VALIDATED:
             return doi_result
         elif doi_result.status == ReferenceStatus.INVALID:
-            # DOI found but doesn't match title/author, continue with title search to check for alternate DOI
-            pass
-        # If DOI not found, continue with title search
+            # DOI found but doesn't match title/author - this is a clear invalid case
+            # Only continue with title search if the failure was due to network issues or DOI not found
+            if "DOI not found" not in doi_result.explanation and "failed" not in doi_result.explanation.lower():
+                return doi_result
+        # If DOI not found or there was a network error, continue with title search
     
     try:
         # Search by title
