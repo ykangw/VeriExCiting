@@ -24,7 +24,7 @@ def extract_text_from_pdf(pdf_file: st.runtime.uploaded_file_manager.UploadedFil
     return pdf_content
 
 
-def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Works Cited"]) -> pd.DataFrame:
+def process_and_verify(bib_text: str) -> pd.DataFrame:
     """Extracts, processes, and verifies references."""
     # Create containers in the main area
     progress_text = st.empty()
@@ -71,19 +71,21 @@ def process_and_verify(bib_text: str, keywords=["Reference", "Bibliography", "Wo
 
     column_config = {
         "First Author": st.column_config.TextColumn(
-            help="First Author's last name, or organization"),
-        "Year": st.column_config.TextColumn(width="small"),
-        "URL": st.column_config.LinkColumn(width="medium"),
+            help="First Author's last name, or organization", width=50),
+        "Year": st.column_config.TextColumn(width=50),
+        "Title": st.column_config.TextColumn(width="medium"),
+        "Type": st.column_config.TextColumn(width="small"),
+        "URL": st.column_config.LinkColumn(width=100),
         "Raw Text": st.column_config.TextColumn(
             "Raw Reference Text",  # Display name
             help="Hover for full text",  # Tooltip message
-            width="medium",  # Width of the column
+            width=100,  # Width of the column: small=75, medium=200
         ),
         "Status": st.column_config.TextColumn(
-            help="Reference validation status"
+            help="Reference validation status", width="small"
         ),
         "Explanation": st.column_config.TextColumn(
-            help="Explanation of the validation result"
+            help="Explanation of the validation result", width="medium"
         )
     }
 
@@ -118,13 +120,21 @@ def main():
 
     st.title("VeriExCite: Verify Existing Citations")
     st.write(
-        "This tool helps verify the existence of citations in academic papers (PDF format). "
+        "This tool helps verify the existence of citations in academic papers."
         "It extracts the bibliography, parses references, and checks their validity."
     )
 
     with st.sidebar:
         st.header("Input")
         pdf_files = st.file_uploader("Upload one or more PDF files", type="pdf", accept_multiple_files=True)
+        # New: optional pasted text input
+        pasted_text = st.text_area(
+            "**OR** paste reference text",
+            value="",
+            placeholder="Paste the bibliography section or references here ...",
+            height=60,
+            # help="Paste the bibliography section or any text containing references. "
+        )
 
         use_dev_key = st.checkbox("Use developer's API key for a trial (limited uses)")
         st.write(
@@ -135,8 +145,9 @@ def main():
             api_key = st.text_input("Enter your Google Gemini API key:", type="password")
 
     if st.sidebar.button("Start Verification"):
-        if not pdf_files:
-            st.warning("Please upload at least one PDF file.")
+        # Require at least one input source: PDFs or pasted text
+        if (not pdf_files) and (not pasted_text or pasted_text.strip() == ""):
+            st.warning("Please upload at least one PDF file or paste some text to verify.")
             return
 
         if not api_key:
@@ -147,7 +158,22 @@ def main():
             set_google_api_key(api_key)
             all_results = []
 
-            for pdf_file in pdf_files:
+            # Process pasted text (if provided)
+            if pasted_text and pasted_text.strip() != "":
+                subheader = st.subheader("Processing: Pasted Text")
+                # bib_text = extract_bibliography_section(pasted_text)
+                bib_text = pasted_text  # Use the pasted text directly
+
+                with st.expander("Pasted Text"):
+                    st.text_area("Extracted Text", bib_text, height=200, label_visibility="hidden")
+
+                results_df = process_and_verify(bib_text)
+                results_df['Source File'] = 'Pasted Text'
+                all_results.append(results_df)
+                subheader.subheader("Completed: Pasted Text")
+
+            # Process uploaded PDFs (if any)
+            for pdf_file in (pdf_files or []):
                 subheader = st.subheader(f"Processing: {pdf_file.name}")
                 bib_text = extract_bibliography_section(extract_text_from_pdf(pdf_file))
 
