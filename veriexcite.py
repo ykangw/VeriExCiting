@@ -161,43 +161,163 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches for a DOI using the Crossref API, with retries. Returns ReferenceCheckResult."""
+    if not ref.DOI:
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No DOI provided for DOI-based search.")
+    
+    try:
+        # Clean DOI by removing potential URL prefix
+        clean_doi = ref.DOI.strip()
+        if clean_doi.startswith('https://doi.org/'):
+            clean_doi = clean_doi[16:]  # Remove 'https://doi.org/'
+        elif clean_doi.startswith('http://doi.org/'):
+            clean_doi = clean_doi[15:]  # Remove 'http://doi.org/'
+        elif clean_doi.startswith('doi:'):
+            clean_doi = clean_doi[4:]  # Remove 'doi:' prefix
+        
+        # Search by DOI directly
+        response = requests.get(f"https://api.crossref.org/works/{clean_doi}")
+        
+        if response.status_code == 200:
+            item = response.json().get('message', {})
+            normalized_input_title = normalize_title(ref.title)
+            
+            # Check if the title matches
+            if 'title' in item and item['title']:
+                item_title = item['title'][0]
+                normalized_item_title = normalize_title(item_title)
+                
+                # Check if the first author's family name matches
+                author_match = False
+                if 'author' in item and item['author'] and len(item['author']) > 0:
+                    if 'family' in item['author'][0]:
+                        author_match = ref.author == item['author'][0]['family']
+                
+                # Title matching with different levels of strictness
+                title_exact_match = normalized_item_title == normalized_input_title
+                title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+                title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+                
+                if title_exact_match or title_partial_match or title_fuzzy_match:
+                    if author_match:
+                        match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                                  explanation=f"DOI, author and title match Crossref record ({match_type} title match).")
+                    else:
+                        return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
+                                                  explanation="DOI and title match Crossref record, but author does not match.")
+                else:
+                    return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
+                                              explanation="DOI matches Crossref record, but title does not match.")
+            else:
+                return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
+                                          explanation="DOI found in Crossref but no title available for comparison.")
+        elif response.status_code == 404:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
+                                      explanation="DOI not found in Crossref database.")
+        else:
+            logging.warning(f"Crossref DOI API request failed with status code: {response.status_code}")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
+                                      explanation=f"Crossref DOI API request failed with status code: {response.status_code}")
+    except Exception as e:
+        logging.warning(f"Crossref DOI search failed for DOI '{ref.DOI}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
+                                  explanation=f"Crossref DOI search failed: {e}")
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using the Crossref API, with retries and more robust matching. Returns ReferenceCheckResult."""
-    params = {'query.title': ref.title, 'rows': 5}  # Increased rows
-    response = requests.get("https://api.crossref.org/works", params=params)
+    # If DOI is provided, search by DOI first
+    if ref.DOI and ref.DOI.strip():
+        doi_result = search_doi_crossref(ref)
+        if doi_result.status == ReferenceStatus.VALIDATED:
+            return doi_result
+        elif doi_result.status == ReferenceStatus.INVALID:
+            # DOI found but doesn't match title/author, continue with title search to check for alternate DOI
+            pass
+        # If DOI not found, continue with title search
+    
+    try:
+        # Search by title
+        params = {'query.title': ref.title, 'rows': 10}  # Increased rows to find more potential matches
+        response = requests.get("https://api.crossref.org/works", params=params)
 
-    if response.status_code == 200:
-        items = response.json().get('message', {}).get('items', [])
-        normalized_input_title = normalize_title(ref.title)
-        for item in items:
-            # If DOI is provided in both reference and item, compare DOI first
+        if response.status_code == 200:
+            items = response.json().get('message', {}).get('items', [])
+            normalized_input_title = normalize_title(ref.title)
+            
+            # First pass: look for exact DOI matches
             ref_doi = ref.DOI.strip().lower() if ref.DOI else ''
-            item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
-            if ref_doi and item_doi:
-                if ref_doi == item_doi:
-                    if 'author' in item and item['author'] and 'family' in item['author'][0] and ref.author == item['author'][0]['family']:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author, title and DOI match Crossref record.")
-                    elif 'author' in item and item['author'] and 'family' in item['author'][0] and ref.author != item['author'][0]['family']:
-                        return ReferenceCheckResult(status=ReferenceStatus.INVALID, explanation="Author does not match Crossref record.")
+            if ref_doi.startswith('https://doi.org/'):
+                ref_doi = ref_doi[16:]
+            elif ref_doi.startswith('http://doi.org/'):
+                ref_doi = ref_doi[15:]
+            elif ref_doi.startswith('doi:'):
+                ref_doi = ref_doi[4:]
+            
+            for item in items:
+                item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
+                
+                # If we have both DOIs and they match exactly
+                if ref_doi and item_doi and ref_doi == item_doi:
+                    if 'author' in item and item['author'] and 'family' in item['author'][0]:
+                        if ref.author == item['author'][0]['family']:
+                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                                      explanation="Author, title and DOI match Crossref record.")
+                        else:
+                            return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
+                                                      explanation="DOI and title match Crossref record, but author does not match.")
+                    else:
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                                  explanation="Title and DOI match Crossref record.")
+            
+            # Second pass: look for title and author matches (when DOI was provided but didn't match)
+            title_author_matches = []
+            for item in items:
+                if 'author' in item and item['author'] and 'family' in item['author'][0]:
+                    if ref.author == item['author'][0]['family']:
+                        # Check if the title matches
+                        if 'title' in item and item['title']:
+                            item_title = item['title'][0]
+                            normalized_item_title = normalize_title(item_title)
+                            
+                            title_exact_match = normalized_item_title == normalized_input_title
+                            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+                            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+                            
+                            if title_exact_match or title_partial_match or title_fuzzy_match:
+                                item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
+                                match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+                                title_author_matches.append((item, match_type, item_doi))
+            
+            # If we found title and author matches
+            if title_author_matches:
+                # If DOI was provided in reference, check if any of the matches have the correct DOI
+                if ref_doi:
+                    for item, match_type, item_doi in title_author_matches:
+                        if item_doi == ref_doi:
+                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                                      explanation=f"Author, title and DOI match Crossref record ({match_type} title match).")
+                    
+                    # If no exact DOI match found but we have title/author matches, this might be a case with multiple DOIs
+                    # Return validated if we found a strong title/author match
+                    best_match = title_author_matches[0]  # Take the first (presumably best) match
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                              explanation=f"Author and title match Crossref record ({best_match[1]} title match). Multiple DOI records may exist for this publication.")
                 else:
-                    return ReferenceCheckResult(status=ReferenceStatus.INVALID, explanation="DOI does not match Crossref record.")
-            # Check if the first author's family name matches
-            if 'author' in item and item['author'] and 'family' in item['author'][0]:
-                if ref.author == item['author'][0]['family']:
-                    # Check if the title matches
-                    if 'title' in item and item['title']:
-                        item_title = item['title'][0]
-                        normalized_item_title = normalize_title(item_title)
-                        if normalized_item_title == normalized_input_title:
-                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (exact match).")
-                        if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (partial match).")
-                        if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
-                            return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Crossref record (fuzzy match).")
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Crossref.")
-    else:
-        logging.warning(f"Crossref API request failed with status code: {response.status_code}")
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Crossref API request failed with status code: {response.status_code}")
+                    # No DOI provided, return the best title/author match
+                    best_match = title_author_matches[0]
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                                              explanation=f"Author and title match Crossref record ({best_match[1]} title match).")
+            
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Crossref.")
+        else:
+            logging.warning(f"Crossref API request failed with status code: {response.status_code}")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Crossref API request failed with status code: {response.status_code}")
+    except Exception as e:
+        logging.warning(f"Crossref title search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Crossref title search failed: {e}")
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
