@@ -6,6 +6,7 @@ import pandas as pd
 import re
 from unidecode import unidecode
 from scholarly import scholarly
+# from scholarly import ProxyGenerator
 import logging
 from typing import List, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -15,8 +16,20 @@ from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from enum import Enum
 
+# TODO:
+#  Check for API rate limits and explore possible optimizations to accelerate the process
+#  Support Chinese reference search, like Baidu Scholar or CNKI https://github.com/1049451037/MagicBaiduScholar
+
 # --- Configuration ---
 GOOGLE_API_KEY = None
+
+# TODO: Proxy support for scholarly
+#  This does not work because scholarly proxy needs https<0.28.0 but gemini requires https>=0.28.0
+# # Set up a ProxyGenerator object to use free proxies for Google Scholar API
+# # This needs to be done only once per session
+# pg = ProxyGenerator()
+# pg.FreeProxies()
+# scholarly.use_proxy(pg)
 
 def set_google_api_key(api_key: str):
     """Set Google Gemini API key."""
@@ -581,13 +594,13 @@ def process_folder(folder_path: str) -> None:
         print("--------------------------------------------------")
         results.append({"File": pdf_file, "Found References": count_verified + count_warning, "Verified": count_verified,
                         "Warnings": count_warning, "Warning List": list_warning, "Explanation": list_explanations})
-        pd.DataFrame(results).to_csv('VeriExCite results.csv', index=False)
+        pd.DataFrame(results).to_csv('VeriExCite results.csv', index=False, encoding='utf-8')
     print("Results saved to VeriExCite results.csv")
 
 
 if __name__ == "__main__":
     ''' Set your Google Gemini API key here '''
-    # Apply for a key at https://ai.google.dev/aistudio with 1500 requests per day for FREE
+    # Apply for a key at https://ai.google.dev/aistudio with hundreds requests per day for FREE
     GOOGLE_API_KEY = "YOUR_API_KEY"
     set_google_api_key(GOOGLE_API_KEY)
 
