@@ -24,6 +24,7 @@ from enum import Enum
 GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
+OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -203,6 +204,7 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
         params = {
             "search": ref.title,
             "per-page": 5,
+            "data-version": OPENALEX_DATA_VERSION,
         }
         if ref.year:
             params["filter"] = f"from_publication_date:{ref.year}-01-01,to_publication_date:{ref.year}-12-31"
