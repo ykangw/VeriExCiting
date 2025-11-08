@@ -25,6 +25,7 @@ GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
 OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
+K10PLUS_BASE_URL = "https://lobid.org/resources/search"
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -161,10 +162,15 @@ def normalize_author_name(author: str) -> str:
     """Returns a lowercase surname/organization token for comparison."""
     if not author:
         return ""
-    author = unidecode(author).lower()
-    author = re.sub(r'[^a-z0-9\s]', ' ', author)
-    parts = author.split()
-    return parts[-1] if parts else ""
+    normalized = unidecode(author).lower()
+    has_comma = "," in normalized
+    normalized = re.sub(r'[^a-z0-9\s]', ' ', normalized)
+    parts = normalized.split()
+    if not parts:
+        return ""
+    if has_comma:
+        return parts[0]
+    return parts[-1]
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -282,6 +288,101 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
     except Exception as e:
         logging.warning(f"OpenAlex search failed for title '{ref.title}': {e}")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"OpenAlex search failed: {e}")
+
+
+def _extract_year_from_publication(publication_nodes: List[dict]) -> str:
+    """Extracts a 4-digit publication year from lobid publication entries."""
+    for publication in publication_nodes or []:
+        for key in ("startDate", "dateStatement"):
+            value = publication.get(key)
+            if not value:
+                continue
+            match = re.search(r"\d{4}", value)
+            if match:
+                return match.group(0)
+    return ""
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches the K10plus (lobid) catalog for matching records."""
+    try:
+        query_parts = [f'title:"{ref.title}"']
+        if ref.author:
+            query_parts.append(f'contribution.agent.label:"{ref.author}"')
+        query = " AND ".join(query_parts)
+        params = {
+            "q": query,
+            "size": 5,
+        }
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "VeriExCite/0.1.0",
+        }
+        response = requests.get(K10PLUS_BASE_URL, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logging.warning(f"K10plus request failed with status code {response.status_code}")
+            return ReferenceCheckResult(
+                status=ReferenceStatus.NOT_FOUND,
+                explanation=f"K10plus request failed with status code {response.status_code}.",
+            )
+
+        data = response.json()
+        members = data.get("member", [])
+        if not members:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+
+        normalized_input_title = normalize_title(ref.title)
+        normalized_ref_author = normalize_author_name(ref.author)
+        potential_invalid_result = None
+
+        for item in members:
+            item_title = item.get("title")
+            if not item_title:
+                continue
+            normalized_item_title = normalize_title(item_title)
+            title_exact_match = normalized_item_title == normalized_input_title
+            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+                continue
+
+            author_match = False
+            if normalized_ref_author:
+                for contribution in item.get("contribution", []):
+                    agent = contribution.get("agent") or {}
+                    candidate_name = agent.get("label")
+                    if candidate_name and normalize_author_name(candidate_name) == normalized_ref_author:
+                        author_match = True
+                        break
+            else:
+                author_match = True
+
+            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+            publication_year = _extract_year_from_publication(item.get("publication", []))
+
+            if author_match:
+                explanation = f"Title found in K10plus catalog ({match_type} title match)."
+                if publication_year:
+                    explanation += f" Publication year {publication_year}."
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
+
+            if not potential_invalid_result:
+                invalid_explanation = f"Title matches K10plus catalog ({match_type}) but author does not match."
+                if publication_year:
+                    invalid_explanation += f" Catalog year {publication_year}."
+                potential_invalid_result = ReferenceCheckResult(
+                    status=ReferenceStatus.INVALID,
+                    explanation=invalid_explanation,
+                )
+
+        if potential_invalid_result:
+            return potential_invalid_result
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+    except Exception as e:
+        logging.warning(f"K10plus search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"K10plus search failed: {e}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -656,6 +757,9 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
             return crossref_result
         if crossref_result.status == ReferenceStatus.VALIDATED:
             return crossref_result
+        k10plus_result = search_title_k10plus(ref)
+        if k10plus_result.status != ReferenceStatus.NOT_FOUND:
+            return k10plus_result
         # For all academic papers, try arXiv as a fallback
         arxiv_result = search_title_arxiv(ref)
         if arxiv_result.status == ReferenceStatus.VALIDATED:
@@ -669,7 +773,7 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
         if scholar_result.status == ReferenceStatus.VALIDATED:
             return scholar_result
         # If all fail, return the most informative NOT_FOUND
-        for result in [crossref_result, arxiv_result, workshop_result, scholar_result]:
+        for result in [crossref_result, k10plus_result, arxiv_result, workshop_result, scholar_result]:
             if result.status == ReferenceStatus.NOT_FOUND:
                 return result
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No evidence found in any source.")
