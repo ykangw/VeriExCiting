@@ -24,6 +24,11 @@ from enum import Enum
 GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
+DEFAULT_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 # TODO: Proxy support for scholarly
 #  This does not work because scholarly proxy needs https<0.28.0 but gemini requires https>=0.28.0
@@ -181,8 +186,14 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (fuzzy match).")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Google Scholar.")
     except Exception as e:
-        logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Google Scholar search failed: {e}")
+        message = str(e)
+        if "Cannot Fetch from Google Scholar" in message:
+            logging.info(f"Google Scholar blocked automated query for title '{ref.title}'.")
+            explanation = "Google Scholar blocked automated access. Please verify manually or try again later."
+        else:
+            logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
+            explanation = f"Google Scholar search failed: {e}"
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=explanation)
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -446,7 +457,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
         }
         
         response = requests.get(url, params=params)
-        
+
         if response.status_code == 200:
             # Parse the XML response - use 'lxml' parser for better compatibility
             soup = BeautifulSoup(response.content, 'lxml-xml')
@@ -459,7 +470,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.content, 'lxml-xml')
                     entries = soup.find_all('entry')
-                
+            
             if not entries:
                 return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
                 
@@ -492,6 +503,12 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
                                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and similar title match in arXiv.")
                                 
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
+        else:
+            logging.warning(f"arXiv API request failed with status code: {response.status_code}")
+            return ReferenceCheckResult(
+                status=ReferenceStatus.NOT_FOUND,
+                explanation=f"arXiv API request failed with status code: {response.status_code}"
+            )
         
     except Exception as e:
         logging.warning(f"arXiv search failed for title '{ref.title}': {e}")
@@ -550,8 +567,17 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No URL provided.")
 
     try:
-        response = requests.get(ref.URL, timeout=5)  # Set a timeout
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        response = requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS)
+        if response.status_code == 403:
+            logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+            google_result = search_title_google(ref)
+            if google_result.status == ReferenceStatus.NOT_FOUND:
+                return ReferenceCheckResult(
+                    status=ReferenceStatus.NOT_FOUND,
+                    explanation="Website blocked automated access (HTTP 403). Unable to confirm via direct fetch."
+                )
+            return google_result
+        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         title_tag = soup.find('title')
 
@@ -564,12 +590,24 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (exact match).")
             elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (partial match).")
+            logging.info(f"Webpage title '{webpage_title}' does not match reference '{ref.title}'. Falling back to Google search.")
+            google_result = search_title_google(ref)
+            if google_result.status == ReferenceStatus.VALIDATED:
+                return google_result
+            return ReferenceCheckResult(
+                status=ReferenceStatus.INVALID,
+                explanation="URL reachable but webpage title does not match the reference title."
+            )
         else:
             logging.warning(f"No <title> tag found at URL: {ref.URL}")
             return search_title_google(ref)
 
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response is not None else "unknown"
+        logging.warning(f"HTTP error accessing URL {ref.URL} (status {status_code}): {e}")
+        return search_title_google(ref)
     except requests.exceptions.RequestException as e:
-        logging.warning(f"Error accessing URL {ref.URL}: {e}")
+        logging.warning(f"Network error accessing URL {ref.URL}: {e}")
         return search_title_google(ref)  # Or consider raising the exception if you want to halt execution on URL errors.
     except Exception as e:
         logging.warning(f"Error processing URL {ref.URL}: {e}")
