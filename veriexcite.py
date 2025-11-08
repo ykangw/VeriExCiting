@@ -22,6 +22,15 @@ from enum import Enum
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
+OPENALEX_BASE_URL = "https://api.openalex.org/works"
+OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
+OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
+K10PLUS_BASE_URL = "https://lobid.org/resources/search"
+DEFAULT_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 # TODO: Proxy support for scholarly
 #  This does not work because scholarly proxy needs https<0.28.0 but gemini requires https>=0.28.0
@@ -149,6 +158,21 @@ def normalize_title(title: str) -> str:
     return title
 
 
+def normalize_author_name(author: str) -> str:
+    """Returns a lowercase surname/organization token for comparison."""
+    if not author:
+        return ""
+    normalized = unidecode(author).lower()
+    has_comma = "," in normalized
+    normalized = re.sub(r'[^a-z0-9\s]', ' ', normalized)
+    parts = normalized.split()
+    if not parts:
+        return ""
+    if has_comma:
+        return parts[0]
+    return parts[-1]
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using scholarly, with error handling and retries."""
@@ -169,8 +193,196 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (fuzzy match).")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Google Scholar.")
     except Exception as e:
-        logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Google Scholar search failed: {e}")
+        message = str(e)
+        if "Cannot Fetch from Google Scholar" in message:
+            logging.info(f"Google Scholar blocked automated query for title '{ref.title}'.")
+            explanation = "Google Scholar blocked automated access. Please verify manually or try again later."
+        else:
+            logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
+            explanation = f"Google Scholar search failed: {e}"
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=explanation)
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches OpenAlex for the reference."""
+    try:
+        params = {
+            "search": ref.title,
+            "per-page": 5,
+            "data-version": OPENALEX_DATA_VERSION,
+        }
+        if ref.year:
+            params["filter"] = f"from_publication_date:{ref.year}-01-01,to_publication_date:{ref.year}-12-31"
+        if OPENALEX_MAILTO:
+            params["mailto"] = OPENALEX_MAILTO
+
+        headers = {"User-Agent": "VeriExCite/0.1.0"}
+        response = requests.get(OPENALEX_BASE_URL, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logging.warning(f"OpenAlex request failed with status code {response.status_code}")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                        explanation=f"OpenAlex request failed with status code {response.status_code}.")
+
+        data = response.json()
+        results = data.get("results", [])
+        if not results:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in OpenAlex.")
+
+        normalized_input_title = normalize_title(ref.title)
+        normalized_ref_author = normalize_author_name(ref.author)
+        potential_invalid_result = None
+
+        def _normalize_doi(doi: str) -> str:
+            if not doi:
+                return ""
+            doi = doi.strip()
+            lowered = doi.lower()
+            for prefix in ("https://doi.org/", "http://doi.org/"):
+                if lowered.startswith(prefix):
+                    return doi[len(prefix):]
+            if lowered.startswith("doi:"):
+                return doi[4:]
+            return doi
+
+        for item in results:
+            item_title = item.get("display_name")
+            if not item_title:
+                continue
+            normalized_item_title = normalize_title(item_title)
+            title_exact_match = normalized_item_title == normalized_input_title
+            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+            # Prefer DOI match when available
+            item_doi = item.get("ids", {}).get("doi")
+            if ref.DOI and item_doi:
+                if _normalize_doi(ref.DOI) == _normalize_doi(item_doi):
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="DOI matches OpenAlex record.")
+
+            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+                continue
+
+            author_match = False
+            if normalized_ref_author:
+                for authorship in item.get("authorships", []):
+                    candidate_name = authorship.get("author", {}).get("display_name")
+                    if normalize_author_name(candidate_name) == normalized_ref_author:
+                        author_match = True
+                        break
+
+            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+            if author_match or not normalized_ref_author:
+                explanation = f"Author and title match OpenAlex record ({match_type} title match)."
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
+
+            if not potential_invalid_result:
+                potential_invalid_result = ReferenceCheckResult(
+                    status=ReferenceStatus.INVALID,
+                    explanation=f"Title matches OpenAlex record ({match_type}) but author does not match."
+                )
+
+        if potential_invalid_result:
+            return potential_invalid_result
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in OpenAlex.")
+    except Exception as e:
+        logging.warning(f"OpenAlex search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"OpenAlex search failed: {e}")
+
+
+def _extract_year_from_publication(publication_nodes: List[dict]) -> str:
+    """Extracts a 4-digit publication year from lobid publication entries."""
+    for publication in publication_nodes or []:
+        for key in ("startDate", "dateStatement"):
+            value = publication.get(key)
+            if not value:
+                continue
+            match = re.search(r"\d{4}", value)
+            if match:
+                return match.group(0)
+    return ""
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches the K10plus (lobid) catalog for matching records."""
+    try:
+        query_parts = [f'title:"{ref.title}"']
+        if ref.author:
+            query_parts.append(f'contribution.agent.label:"{ref.author}"')
+        query = " AND ".join(query_parts)
+        params = {
+            "q": query,
+            "size": 5,
+        }
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "VeriExCite/0.1.0",
+        }
+        response = requests.get(K10PLUS_BASE_URL, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logging.warning(f"K10plus request failed with status code {response.status_code}")
+            return ReferenceCheckResult(
+                status=ReferenceStatus.NOT_FOUND,
+                explanation=f"K10plus request failed with status code {response.status_code}.",
+            )
+
+        data = response.json()
+        members = data.get("member", [])
+        if not members:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+
+        normalized_input_title = normalize_title(ref.title)
+        normalized_ref_author = normalize_author_name(ref.author)
+        potential_invalid_result = None
+
+        for item in members:
+            item_title = item.get("title")
+            if not item_title:
+                continue
+            normalized_item_title = normalize_title(item_title)
+            title_exact_match = normalized_item_title == normalized_input_title
+            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+                continue
+
+            author_match = False
+            if normalized_ref_author:
+                for contribution in item.get("contribution", []):
+                    agent = contribution.get("agent") or {}
+                    candidate_name = agent.get("label")
+                    if candidate_name and normalize_author_name(candidate_name) == normalized_ref_author:
+                        author_match = True
+                        break
+            else:
+                author_match = True
+
+            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+            publication_year = _extract_year_from_publication(item.get("publication", []))
+
+            if author_match:
+                explanation = f"Title found in K10plus catalog ({match_type} title match)."
+                if publication_year:
+                    explanation += f" Publication year {publication_year}."
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
+
+            if not potential_invalid_result:
+                invalid_explanation = f"Title matches K10plus catalog ({match_type}) but author does not match."
+                if publication_year:
+                    invalid_explanation += f" Catalog year {publication_year}."
+                potential_invalid_result = ReferenceCheckResult(
+                    status=ReferenceStatus.INVALID,
+                    explanation=invalid_explanation,
+                )
+
+        if potential_invalid_result:
+            return potential_invalid_result
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+    except Exception as e:
+        logging.warning(f"K10plus search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"K10plus search failed: {e}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -348,7 +560,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
         }
         
         response = requests.get(url, params=params)
-        
+
         if response.status_code == 200:
             # Parse the XML response - use 'lxml' parser for better compatibility
             soup = BeautifulSoup(response.content, 'lxml-xml')
@@ -361,7 +573,7 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.content, 'lxml-xml')
                     entries = soup.find_all('entry')
-                
+            
             if not entries:
                 return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
                 
@@ -394,6 +606,12 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
                                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and similar title match in arXiv.")
                                 
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in arXiv.")
+        else:
+            logging.warning(f"arXiv API request failed with status code: {response.status_code}")
+            return ReferenceCheckResult(
+                status=ReferenceStatus.NOT_FOUND,
+                explanation=f"arXiv API request failed with status code: {response.status_code}"
+            )
         
     except Exception as e:
         logging.warning(f"arXiv search failed for title '{ref.title}': {e}")
@@ -452,8 +670,17 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No URL provided.")
 
     try:
-        response = requests.get(ref.URL, timeout=5)  # Set a timeout
-        response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        response = requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS)
+        if response.status_code == 403:
+            logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+            google_result = search_title_google(ref)
+            if google_result.status == ReferenceStatus.NOT_FOUND:
+                return ReferenceCheckResult(
+                    status=ReferenceStatus.NOT_FOUND,
+                    explanation="Website blocked automated access (HTTP 403). Unable to confirm via direct fetch."
+                )
+            return google_result
+        response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         title_tag = soup.find('title')
 
@@ -466,12 +693,24 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (exact match).")
             elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (partial match).")
+            logging.info(f"Webpage title '{webpage_title}' does not match reference '{ref.title}'. Falling back to Google search.")
+            google_result = search_title_google(ref)
+            if google_result.status == ReferenceStatus.VALIDATED:
+                return google_result
+            return ReferenceCheckResult(
+                status=ReferenceStatus.INVALID,
+                explanation="URL reachable but webpage title does not match the reference title."
+            )
         else:
             logging.warning(f"No <title> tag found at URL: {ref.URL}")
             return search_title_google(ref)
 
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response is not None else "unknown"
+        logging.warning(f"HTTP error accessing URL {ref.URL} (status {status_code}): {e}")
+        return search_title_google(ref)
     except requests.exceptions.RequestException as e:
-        logging.warning(f"Error accessing URL {ref.URL}: {e}")
+        logging.warning(f"Network error accessing URL {ref.URL}: {e}")
         return search_title_google(ref)  # Or consider raising the exception if you want to halt execution on URL errors.
     except Exception as e:
         logging.warning(f"Error processing URL {ref.URL}: {e}")
@@ -509,12 +748,18 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
     if ref.type == "non_academic_website":
         return verify_url(ref)
     else:
+        openalex_result = search_title_openalex(ref)
+        if openalex_result.status != ReferenceStatus.NOT_FOUND:
+            return openalex_result
         # First try Crossref
         crossref_result = search_title_crossref(ref)
         if crossref_result.status == ReferenceStatus.INVALID:
             return crossref_result
         if crossref_result.status == ReferenceStatus.VALIDATED:
             return crossref_result
+        k10plus_result = search_title_k10plus(ref)
+        if k10plus_result.status != ReferenceStatus.NOT_FOUND:
+            return k10plus_result
         # For all academic papers, try arXiv as a fallback
         arxiv_result = search_title_arxiv(ref)
         if arxiv_result.status == ReferenceStatus.VALIDATED:
@@ -528,7 +773,7 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
         if scholar_result.status == ReferenceStatus.VALIDATED:
             return scholar_result
         # If all fail, return the most informative NOT_FOUND
-        for result in [crossref_result, arxiv_result, workshop_result, scholar_result]:
+        for result in [crossref_result, k10plus_result, arxiv_result, workshop_result, scholar_result]:
             if result.status == ReferenceStatus.NOT_FOUND:
                 return result
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No evidence found in any source.")
