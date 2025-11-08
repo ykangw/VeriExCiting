@@ -136,13 +136,25 @@ def main():
             # help="Paste the bibliography section or any text containing references. "
         )
 
-        use_dev_key = st.checkbox("Use developer's API key for a trial (limited uses)")
-        st.write(
-            "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio) with hundreds of requests per day for FREE.")
-        if use_dev_key:
-            api_key = st.secrets["GOOGLE_API_KEY"]
+        secrets_api_key = st.secrets.get("GOOGLE_API_KEY")
+        use_dev_key = False
+
+        if secrets_api_key:
+            api_key = secrets_api_key
+            st.success("Using Google Gemini API key from Streamlit secrets.")
         else:
-            api_key = st.text_input("Enter your Google Gemini API key:", type="password")
+            use_dev_key = st.checkbox("Use developer's API key for a trial (limited uses)")
+            st.write(
+                "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio) with hundreds of requests per day for FREE.")
+            if use_dev_key:
+                dev_key = st.secrets.get("GOOGLE_API_KEY")
+                if dev_key:
+                    api_key = dev_key
+                else:
+                    st.warning("Developer key not configured in secrets. Please enter your own key.")
+                    api_key = ""
+            else:
+                api_key = st.text_input("Enter your Google Gemini API key:", type="password")
 
         # Privacy notice for users
         st.info(

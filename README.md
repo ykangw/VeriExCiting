@@ -19,7 +19,7 @@ This flowchart illustrates the VeriExCite process: ![VeriExCite Flowchart](image
 - **Extraction:** Extracts the bibliography section from PDF documents.
 - **Parsing:** Uses Google Gemini API to parse references into structured data (title, authors, DOI, type, etc.)
 - **Verification:**
-  - Checks academic references against Crossref, Google Scholar, and Arxiv.
+  - Checks academic references against OpenAlex, Crossref, Google Scholar, and Arxiv.
   - Checks website references using their URL and Google Search.
   - Identifies potentially fabricated citations.
 - **Reporting:**
@@ -46,10 +46,14 @@ git clone https://github.com/ykangw/VeriExCiting.git
 cd VeriExciting
 ```
 
-2. Install dependencies using uv:
+2. Install the Python dependencies (uv recommended, pip works too):
 
 ```bash
-uv pip install .
+# using uv
+uv pip install -r requirements.txt
+
+# or using pip
+pip install -r requirements.txt
 ```
 
 3. Run the Streamlit app:
@@ -61,7 +65,20 @@ streamlit run streamlit_app.py
 **Set Google Gemini API Key:**
 
 - Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free up to 1500 requests per day!
-- Set your API key with `set_google_api_key` function.
+- Either set the key in code via `set_google_api_key`, export `GOOGLE_API_KEY` in your shell, or store it securely in `.streamlit/secrets.toml` (recommended, see below).
+
+**Optional: OpenAlex contact parameter**
+
+- Set the `OPENALEX_MAILTO` environment variable (or add it to `.streamlit/secrets.toml`) to include the polite contact parameter recommended by the OpenAlex API.
+
+**Example `.streamlit/secrets.toml`**
+
+```toml
+GOOGLE_API_KEY = "your-google-key"
+OPENALEX_MAILTO = "your.email@example.com"
+```
+
+When `GOOGLE_API_KEY` is present in secrets the Streamlit sidebar hides the manual input box; otherwise it prompts for a key.
 
 **Single PDF File**
 

@@ -22,6 +22,8 @@ from enum import Enum
 
 # --- Configuration ---
 GOOGLE_API_KEY = None
+OPENALEX_BASE_URL = "https://api.openalex.org/works"
+OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
 
 # TODO: Proxy support for scholarly
 #  This does not work because scholarly proxy needs https<0.28.0 but gemini requires https>=0.28.0
@@ -149,6 +151,16 @@ def normalize_title(title: str) -> str:
     return title
 
 
+def normalize_author_name(author: str) -> str:
+    """Returns a lowercase surname/organization token for comparison."""
+    if not author:
+        return ""
+    author = unidecode(author).lower()
+    author = re.sub(r'[^a-z0-9\s]', ' ', author)
+    parts = author.split()
+    return parts[-1] if parts else ""
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using scholarly, with error handling and retries."""
@@ -171,6 +183,92 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     except Exception as e:
         logging.warning(f"Scholarly search failed for title '{ref.title}': {e}")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Google Scholar search failed: {e}")
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches OpenAlex for the reference."""
+    try:
+        params = {
+            "search": ref.title,
+            "per-page": 5,
+        }
+        if ref.year:
+            params["filter"] = f"from_publication_date:{ref.year}-01-01,to_publication_date:{ref.year}-12-31"
+        if OPENALEX_MAILTO:
+            params["mailto"] = OPENALEX_MAILTO
+
+        headers = {"User-Agent": "VeriExCite/0.1.0"}
+        response = requests.get(OPENALEX_BASE_URL, params=params, headers=headers, timeout=10)
+        if response.status_code != 200:
+            logging.warning(f"OpenAlex request failed with status code {response.status_code}")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                        explanation=f"OpenAlex request failed with status code {response.status_code}.")
+
+        data = response.json()
+        results = data.get("results", [])
+        if not results:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in OpenAlex.")
+
+        normalized_input_title = normalize_title(ref.title)
+        normalized_ref_author = normalize_author_name(ref.author)
+        potential_invalid_result = None
+
+        def _normalize_doi(doi: str) -> str:
+            if not doi:
+                return ""
+            doi = doi.strip()
+            lowered = doi.lower()
+            for prefix in ("https://doi.org/", "http://doi.org/"):
+                if lowered.startswith(prefix):
+                    return doi[len(prefix):]
+            if lowered.startswith("doi:"):
+                return doi[4:]
+            return doi
+
+        for item in results:
+            item_title = item.get("display_name")
+            if not item_title:
+                continue
+            normalized_item_title = normalize_title(item_title)
+            title_exact_match = normalized_item_title == normalized_input_title
+            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+            # Prefer DOI match when available
+            item_doi = item.get("ids", {}).get("doi")
+            if ref.DOI and item_doi:
+                if _normalize_doi(ref.DOI) == _normalize_doi(item_doi):
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="DOI matches OpenAlex record.")
+
+            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+                continue
+
+            author_match = False
+            if normalized_ref_author:
+                for authorship in item.get("authorships", []):
+                    candidate_name = authorship.get("author", {}).get("display_name")
+                    if normalize_author_name(candidate_name) == normalized_ref_author:
+                        author_match = True
+                        break
+
+            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+            if author_match or not normalized_ref_author:
+                explanation = f"Author and title match OpenAlex record ({match_type} title match)."
+                return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
+
+            if not potential_invalid_result:
+                potential_invalid_result = ReferenceCheckResult(
+                    status=ReferenceStatus.INVALID,
+                    explanation=f"Title matches OpenAlex record ({match_type}) but author does not match."
+                )
+
+        if potential_invalid_result:
+            return potential_invalid_result
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in OpenAlex.")
+    except Exception as e:
+        logging.warning(f"OpenAlex search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"OpenAlex search failed: {e}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -509,6 +607,9 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
     if ref.type == "non_academic_website":
         return verify_url(ref)
     else:
+        openalex_result = search_title_openalex(ref)
+        if openalex_result.status != ReferenceStatus.NOT_FOUND:
+            return openalex_result
         # First try Crossref
         crossref_result = search_title_crossref(ref)
         if crossref_result.status == ReferenceStatus.INVALID:
