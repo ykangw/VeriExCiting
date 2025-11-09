@@ -355,6 +355,30 @@ def _build_k10plus_title_query(title: str) -> str:
     return " AND ".join(dict.fromkeys(clauses))
 
 
+def _build_author_query(author: str) -> List[str]:
+    """Returns a list of increasingly relaxed author clauses."""
+    clauses = []
+    if not author:
+        return clauses
+
+    # Exact label match (e.g., "Smith, Scott")
+    exact = author.strip()
+    if exact:
+        clauses.append(f'contribution.agent.label:"{_escape_lucene_term(exact)}"')
+
+    # Bare surname match (e.g., Smith)
+    surname_token = _extract_author_search_token(author)
+    if surname_token:
+        clauses.append(f'contribution.agent.label:{_escape_lucene_term(surname_token)}')
+
+    # Normalized wildcard fallback (e.g., *smith*)
+    normalized = normalize_author_name(author)
+    if normalized:
+        clauses.append(f'contribution.agent.label:*{_escape_lucene_term(normalized)}*')
+
+    return clauses
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches the K10plus (lobid) catalog for matching records."""
@@ -364,12 +388,8 @@ def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
         if not title_query:
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Invalid title for K10plus search.")
         query_parts = [f"({title_query})"]
-        author_token = _extract_author_search_token(ref.author) or normalize_author_name(ref.author)
-        if author_token:
-            escaped_author = _escape_lucene_term(author_token)
-            wildcard_author = f'*{escaped_author}*'
-            query_parts.append(f'contribution.agent.label:{wildcard_author}')
-        query = " AND ".join(query_parts)
+        author_clauses = _build_author_query(ref.author)
+        query = " AND ".join(query_parts + author_clauses[:1]) if author_clauses else " AND ".join(query_parts)
         params = {
             "q": query,
             "size": 5,
