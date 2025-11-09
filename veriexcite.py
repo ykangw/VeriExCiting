@@ -173,6 +173,19 @@ def normalize_author_name(author: str) -> str:
     return parts[-1]
 
 
+def _extract_author_search_token(author: str) -> str:
+    """Returns a surname token with original casing for catalog queries."""
+    if not author:
+        return ""
+    author = author.strip()
+    if not author:
+        return ""
+    if "," in author:
+        return author.split(",")[0].strip()
+    parts = author.split()
+    return parts[-1] if parts else ""
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using scholarly, with error handling and retries."""
@@ -303,17 +316,64 @@ def _extract_year_from_publication(publication_nodes: List[dict]) -> str:
     return ""
 
 
+def _escape_lucene_term(term: str, preserve_wildcards: bool = False) -> str:
+    """Escapes Lucene special characters unless explicit wildcards should be preserved."""
+    specials = set(r'+-&&||!(){}[]^"~*?:\/')
+    escaped = []
+    for char in term:
+        if char in specials and not (preserve_wildcards and char in {"*", "?"}):
+            escaped.append(f"\\{char}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
+def _field_word_clauses(text: str, field: str, limit: int = 3) -> List[str]:
+    """Creates field-specific clauses for up to `limit` meaningful tokens."""
+    if not text:
+        return []
+    words = re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    if not words:
+        return []
+    keywords = [w for w in words if len(w) > 3] or words
+    clauses = []
+    for keyword in keywords[:limit]:
+        clauses.append(f"{field}:{_escape_lucene_term(keyword)}")
+    return clauses
+
+
+def _build_k10plus_title_query(title: str) -> str:
+    """Builds a resilient title query targeting main and subtitle fields."""
+    if not title:
+        return ""
+    parts = re.split(r"\s*:\s*", title, maxsplit=1)
+    clauses = _field_word_clauses(parts[0], "title", limit=4)
+    if len(parts) > 1:
+        clauses.extend(_field_word_clauses(parts[1], "otherTitleInformation", limit=4))
+    if not clauses:
+        clauses = _field_word_clauses(title, "title", limit=3)
+    return " AND ".join(dict.fromkeys(clauses))
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches the K10plus (lobid) catalog for matching records."""
     try:
-        query_parts = [f'title:"{ref.title}"']
-        if ref.author:
-            query_parts.append(f'contribution.agent.label:"{ref.author}"')
+        # Use field queries documented at https://lobid.org/resources/api to combine title and contributor filters.
+        title_query = _build_k10plus_title_query(ref.title)
+        if not title_query:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Invalid title for K10plus search.")
+        query_parts = [f"({title_query})"]
+        author_token = _extract_author_search_token(ref.author) or normalize_author_name(ref.author)
+        if author_token:
+            escaped_author = _escape_lucene_term(author_token)
+            wildcard_author = f'*{escaped_author}*'
+            query_parts.append(f'contribution.agent.label:{wildcard_author}')
         query = " AND ".join(query_parts)
         params = {
             "q": query,
             "size": 5,
+            "format": "json",
         }
         headers = {
             "Accept": "application/json",
