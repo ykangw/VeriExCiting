@@ -332,7 +332,16 @@ def _field_word_clauses(text: str, field: str, limit: int = 3) -> List[str]:
     """Creates field-specific clauses for up to `limit` meaningful tokens."""
     if not text:
         return []
-    words = re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    tokens = []
+    if isinstance(text, list):
+        for part in text:
+            if isinstance(part, dict):
+                tokens.extend(re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", part.get("label", "")))
+            else:
+                tokens.extend(re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", str(part)))
+    else:
+        tokens = re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    words = tokens
     if not words:
         return []
     keywords = [w for w in words if len(w) > 3] or words
@@ -342,14 +351,31 @@ def _field_word_clauses(text: str, field: str, limit: int = 3) -> List[str]:
     return clauses
 
 
+def _split_title_and_subtitle(title: str) -> Tuple[str, str]:
+    """Attempts to split a reference title into main title and subtitle text."""
+    if not title:
+        return "", ""
+    separators = [":", " - ", " – ", " — ", ". "]
+    for sep in separators:
+        if sep in title:
+            head, tail = title.split(sep, 1)
+            return head.strip(), tail.strip()
+    words = title.split()
+    if len(words) > 6:
+        head = " ".join(words[:4])
+        tail = " ".join(words[4:])
+        return head.strip(), tail.strip()
+    return title.strip(), ""
+
+
 def _build_k10plus_title_query(title: str) -> str:
     """Builds a resilient title query targeting main and subtitle fields."""
     if not title:
         return ""
-    parts = re.split(r"\s*:\s*", title, maxsplit=1)
-    clauses = _field_word_clauses(parts[0], "title", limit=4)
-    if len(parts) > 1:
-        clauses.extend(_field_word_clauses(parts[1], "otherTitleInformation", limit=4))
+    main_part, subtitle_part = _split_title_and_subtitle(title)
+    clauses = _field_word_clauses(main_part, "title", limit=4)
+    if subtitle_part:
+        clauses.extend(_field_word_clauses(subtitle_part, "otherTitleInformation", limit=4))
     if not clauses:
         clauses = _field_word_clauses(title, "title", limit=3)
     return " AND ".join(dict.fromkeys(clauses))
@@ -519,8 +545,58 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
                                           explanation="DOI found in Crossref but no title available for comparison.")
         elif response.status_code == 404:
+            # Fallback: resolve DOI via doi.org and try to parse metadata when Crossref doesn't have the record.
+            doi_url = f"https://doi.org/{clean_doi}"
+            try:
+                doi_response = requests.get(
+                    doi_url,
+                    headers={"Accept": "application/vnd.citationstyles.csl+json"},
+                    timeout=10,
+                )
+                if doi_response.status_code == 200:
+                    item = doi_response.json()
+                    normalized_input_title = normalize_title(ref.title)
+                    item_title = item.get("title") or ""
+                    normalized_item_title = normalize_title(item_title)
+
+                    author_match = False
+                    item_author = ""
+                    authors = item.get("author") or []
+                    if authors:
+                        author = authors[0]
+                        item_author = author.get("family") or author.get("literal") or ""
+                        if item_author:
+                            author_match = normalize_author_name(item_author) == normalize_author_name(ref.author)
+
+                    title_exact_match = normalized_item_title == normalized_input_title
+                    title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+                    title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+                    if title_exact_match or title_partial_match or title_fuzzy_match:
+                        if author_match:
+                            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+                            return ReferenceCheckResult(
+                                status=ReferenceStatus.VALIDATED,
+                                explanation=f"DOI resolved via doi.org (CSL JSON); title and author match ({match_type})."
+                            )
+                        else:
+                            return ReferenceCheckResult(
+                                status=ReferenceStatus.INVALID,
+                                explanation="DOI resolved via doi.org, but author does not match."
+                            )
+                    else:
+                        return ReferenceCheckResult(
+                            status=ReferenceStatus.INVALID,
+                            explanation="DOI resolved via doi.org, but title does not match."
+                        )
+                else:
+                    logging.warning(f"doi.org metadata request failed for '{clean_doi}' with status {doi_response.status_code}")
+
+            except Exception as doi_error:
+                logging.warning(f"Failed to resolve DOI '{clean_doi}' via doi.org: {doi_error}")
+
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
-                                      explanation="DOI not found in Crossref database.")
+                                      explanation="DOI not found in Crossref database or via doi.org metadata.")
         else:
             logging.warning(f"Crossref DOI API request failed with status code: {response.status_code}")
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
