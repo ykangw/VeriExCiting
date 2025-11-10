@@ -173,6 +173,19 @@ def normalize_author_name(author: str) -> str:
     return parts[-1]
 
 
+def _extract_author_search_token(author: str) -> str:
+    """Returns a surname token with original casing for catalog queries."""
+    if not author:
+        return ""
+    author = author.strip()
+    if not author:
+        return ""
+    if "," in author:
+        return author.split(",")[0].strip()
+    parts = author.split()
+    return parts[-1] if parts else ""
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches for a title using scholarly, with error handling and retries."""
@@ -303,17 +316,110 @@ def _extract_year_from_publication(publication_nodes: List[dict]) -> str:
     return ""
 
 
+def _escape_lucene_term(term: str, preserve_wildcards: bool = False) -> str:
+    """Escapes Lucene special characters unless explicit wildcards should be preserved."""
+    specials = set(r'+-&&||!(){}[]^"~*?:\/')
+    escaped = []
+    for char in term:
+        if char in specials and not (preserve_wildcards and char in {"*", "?"}):
+            escaped.append(f"\\{char}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
+def _field_word_clauses(text: str, field: str, limit: int = 3) -> List[str]:
+    """Creates field-specific clauses for up to `limit` meaningful tokens."""
+    if not text:
+        return []
+    tokens = []
+    if isinstance(text, list):
+        for part in text:
+            if isinstance(part, dict):
+                tokens.extend(re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", part.get("label", "")))
+            else:
+                tokens.extend(re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", str(part)))
+    else:
+        tokens = re.findall(r"[0-9A-Za-zÀ-ÖØ-öø-ÿ]+", text)
+    words = tokens
+    if not words:
+        return []
+    keywords = [w for w in words if len(w) > 3] or words
+    clauses = []
+    for keyword in keywords[:limit]:
+        clauses.append(f"{field}:{_escape_lucene_term(keyword)}")
+    return clauses
+
+
+def _split_title_and_subtitle(title: str) -> Tuple[str, str]:
+    """Attempts to split a reference title into main title and subtitle text."""
+    if not title:
+        return "", ""
+    separators = [":", " - ", " – ", " — ", ". "]
+    for sep in separators:
+        if sep in title:
+            head, tail = title.split(sep, 1)
+            return head.strip(), tail.strip()
+    words = title.split()
+    if len(words) > 6:
+        head = " ".join(words[:4])
+        tail = " ".join(words[4:])
+        return head.strip(), tail.strip()
+    return title.strip(), ""
+
+
+def _build_k10plus_title_query(title: str) -> str:
+    """Builds a resilient title query targeting main and subtitle fields."""
+    if not title:
+        return ""
+    main_part, subtitle_part = _split_title_and_subtitle(title)
+    clauses = _field_word_clauses(main_part, "title", limit=4)
+    if subtitle_part:
+        clauses.extend(_field_word_clauses(subtitle_part, "otherTitleInformation", limit=4))
+    if not clauses:
+        clauses = _field_word_clauses(title, "title", limit=3)
+    return " AND ".join(dict.fromkeys(clauses))
+
+
+def _build_author_query(author: str) -> List[str]:
+    """Returns a list of increasingly relaxed author clauses."""
+    clauses = []
+    if not author:
+        return clauses
+
+    # Exact label match (e.g., "Smith, Scott")
+    exact = author.strip()
+    if exact:
+        clauses.append(f'contribution.agent.label:"{_escape_lucene_term(exact)}"')
+
+    # Bare surname match (e.g., Smith)
+    surname_token = _extract_author_search_token(author)
+    if surname_token:
+        clauses.append(f'contribution.agent.label:{_escape_lucene_term(surname_token)}')
+
+    # Normalized wildcard fallback (e.g., *smith*)
+    normalized = normalize_author_name(author)
+    if normalized:
+        clauses.append(f'contribution.agent.label:*{_escape_lucene_term(normalized)}*')
+
+    return clauses
+
+
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches the K10plus (lobid) catalog for matching records."""
     try:
-        query_parts = [f'title:"{ref.title}"']
-        if ref.author:
-            query_parts.append(f'contribution.agent.label:"{ref.author}"')
-        query = " AND ".join(query_parts)
+        # Use field queries documented at https://lobid.org/resources/api to combine title and contributor filters.
+        title_query = _build_k10plus_title_query(ref.title)
+        if not title_query:
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Invalid title for K10plus search.")
+        query_parts = [f"({title_query})"]
+        author_clauses = _build_author_query(ref.author)
+        query = " AND ".join(query_parts + author_clauses[:1]) if author_clauses else " AND ".join(query_parts)
         params = {
             "q": query,
             "size": 5,
+            "format": "json",
         }
         headers = {
             "Accept": "application/json",
@@ -439,8 +545,58 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
                                           explanation="DOI found in Crossref but no title available for comparison.")
         elif response.status_code == 404:
+            # Fallback: resolve DOI via doi.org and try to parse metadata when Crossref doesn't have the record.
+            doi_url = f"https://doi.org/{clean_doi}"
+            try:
+                doi_response = requests.get(
+                    doi_url,
+                    headers={"Accept": "application/vnd.citationstyles.csl+json"},
+                    timeout=10,
+                )
+                if doi_response.status_code == 200:
+                    item = doi_response.json()
+                    normalized_input_title = normalize_title(ref.title)
+                    item_title = item.get("title") or ""
+                    normalized_item_title = normalize_title(item_title)
+
+                    author_match = False
+                    item_author = ""
+                    authors = item.get("author") or []
+                    if authors:
+                        author = authors[0]
+                        item_author = author.get("family") or author.get("literal") or ""
+                        if item_author:
+                            author_match = normalize_author_name(item_author) == normalize_author_name(ref.author)
+
+                    title_exact_match = normalized_item_title == normalized_input_title
+                    title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
+                    title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+
+                    if title_exact_match or title_partial_match or title_fuzzy_match:
+                        if author_match:
+                            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
+                            return ReferenceCheckResult(
+                                status=ReferenceStatus.VALIDATED,
+                                explanation=f"DOI resolved via doi.org (CSL JSON); title and author match ({match_type})."
+                            )
+                        else:
+                            return ReferenceCheckResult(
+                                status=ReferenceStatus.INVALID,
+                                explanation="DOI resolved via doi.org, but author does not match."
+                            )
+                    else:
+                        return ReferenceCheckResult(
+                            status=ReferenceStatus.INVALID,
+                            explanation="DOI resolved via doi.org, but title does not match."
+                        )
+                else:
+                    logging.warning(f"doi.org metadata request failed for '{clean_doi}' with status {doi_response.status_code}")
+
+            except Exception as doi_error:
+                logging.warning(f"Failed to resolve DOI '{clean_doi}' via doi.org: {doi_error}")
+
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 
-                                      explanation="DOI not found in Crossref database.")
+                                      explanation="DOI not found in Crossref database or via doi.org metadata.")
         else:
             logging.warning(f"Crossref DOI API request failed with status code: {response.status_code}")
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, 

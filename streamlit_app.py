@@ -47,7 +47,7 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
     }
 
     results = []
-    for idx, ref in enumerate(references):
+    for idx, ref in enumerate(references, start=1):
         results.append({
             "Index": idx,
             "First Author": ref.author,
@@ -90,7 +90,8 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
     }
 
     df_display = df[[
-        'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']]
+        'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']].copy()
+    df_display.index = df_display.index + 1  # display rows starting at 1
     placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
 
     verified_count = 0
@@ -106,7 +107,8 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
         else:
             warning_count += 1
         df_display = df[[
-            'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']]
+            'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']].copy()
+        df_display.index = df_display.index + 1  # keep human-readable numbering
         placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
         progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
 
@@ -209,12 +211,31 @@ def main():
 
             if all_results:
                 combined_results = pd.concat(all_results, ignore_index=True)
+
                 csv = combined_results.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="Download All Results as CSV",
                     data=csv,
                     file_name='VeriCite_results.csv',
                     mime='text/csv',
+                )
+                
+                markdown_table = combined_results.to_markdown(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download All Results as Markdown Table",
+                    data=markdown_table,
+                    file_name='VeriCite_results.md',
+                    mime='text/markdown',
+                )
+
+                excel_buffer = io.BytesIO()
+                combined_results.to_excel(excel_buffer, index=False)
+                excel_buffer.seek(0)
+                st.download_button(
+                    label="Download All Results as Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name='VeriCite_results.xlsx',
+                    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 )
 
         except ValueError as ve:
