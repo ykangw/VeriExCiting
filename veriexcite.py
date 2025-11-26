@@ -25,7 +25,7 @@ GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
 OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
-K10PLUS_BASE_URL = "https://lobid.org/resources/search"
+LOBID_BASE_URL = "https://lobid.org/resources/search"
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -368,7 +368,7 @@ def _split_title_and_subtitle(title: str) -> Tuple[str, str]:
     return title.strip(), ""
 
 
-def _build_k10plus_title_query(title: str) -> str:
+def _build_lobid_title_query(title: str) -> str:
     """Builds a resilient title query targeting main and subtitle fields."""
     if not title:
         return ""
@@ -406,13 +406,13 @@ def _build_author_query(author: str) -> List[str]:
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
-    """Searches the K10plus (lobid) catalog for matching records."""
+def search_title_lobid(ref: ReferenceExtraction) -> ReferenceCheckResult:
+    """Searches the hbz (lobid) catalog for matching records."""
     try:
         # Use field queries documented at https://lobid.org/resources/api to combine title and contributor filters.
-        title_query = _build_k10plus_title_query(ref.title)
+        title_query = _build_lobid_title_query(ref.title)
         if not title_query:
-            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Invalid title for K10plus search.")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Invalid title for hbz search.")
         query_parts = [f"({title_query})"]
         author_clauses = _build_author_query(ref.author)
         query = " AND ".join(query_parts + author_clauses[:1]) if author_clauses else " AND ".join(query_parts)
@@ -425,18 +425,18 @@ def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
             "Accept": "application/json",
             "User-Agent": "VeriExCite/0.1.0",
         }
-        response = requests.get(K10PLUS_BASE_URL, params=params, headers=headers, timeout=10)
+        response = requests.get(LOBID_BASE_URL, params=params, headers=headers, timeout=10)
         if response.status_code != 200:
-            logging.warning(f"K10plus request failed with status code {response.status_code}")
+            logging.warning(f"hbz request failed with status code {response.status_code}")
             return ReferenceCheckResult(
                 status=ReferenceStatus.NOT_FOUND,
-                explanation=f"K10plus request failed with status code {response.status_code}.",
+                explanation=f"hbz request failed with status code {response.status_code}.",
             )
 
         data = response.json()
         members = data.get("member", [])
         if not members:
-            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+            return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in hbz.")
 
         normalized_input_title = normalize_title(ref.title)
         normalized_ref_author = normalize_author_name(ref.author)
@@ -469,13 +469,13 @@ def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
             publication_year = _extract_year_from_publication(item.get("publication", []))
 
             if author_match:
-                explanation = f"Title found in K10plus catalog ({match_type} title match)."
+                explanation = f"Title found in hbz catalog ({match_type} title match)."
                 if publication_year:
                     explanation += f" Publication year {publication_year}."
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
 
             if not potential_invalid_result:
-                invalid_explanation = f"Title matches K10plus catalog ({match_type}) but author does not match."
+                invalid_explanation = f"Title matches hbz catalog ({match_type}) but author does not match."
                 if publication_year:
                     invalid_explanation += f" Catalog year {publication_year}."
                 potential_invalid_result = ReferenceCheckResult(
@@ -485,10 +485,10 @@ def search_title_k10plus(ref: ReferenceExtraction) -> ReferenceCheckResult:
 
         if potential_invalid_result:
             return potential_invalid_result
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in K10plus.")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in hbz.")
     except Exception as e:
-        logging.warning(f"K10plus search failed for title '{ref.title}': {e}")
-        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"K10plus search failed: {e}")
+        logging.warning(f"hbz search failed for title '{ref.title}': {e}")
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"hbz search failed: {e}")
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -913,9 +913,9 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
             return crossref_result
         if crossref_result.status == ReferenceStatus.VALIDATED:
             return crossref_result
-        k10plus_result = search_title_k10plus(ref)
-        if k10plus_result.status != ReferenceStatus.NOT_FOUND:
-            return k10plus_result
+        lobid_result = search_title_lobid(ref)
+        if lobid_result.status != ReferenceStatus.NOT_FOUND:
+            return lobid_result
         # For all academic papers, try arXiv as a fallback
         arxiv_result = search_title_arxiv(ref)
         if arxiv_result.status == ReferenceStatus.VALIDATED:
@@ -929,7 +929,7 @@ def search_title(ref: ReferenceExtraction) -> ReferenceCheckResult:
         if scholar_result.status == ReferenceStatus.VALIDATED:
             return scholar_result
         # If all fail, return the most informative NOT_FOUND
-        for result in [crossref_result, k10plus_result, arxiv_result, workshop_result, scholar_result]:
+        for result in [crossref_result, lobid_result, arxiv_result, workshop_result, scholar_result]:
             if result.status == ReferenceStatus.NOT_FOUND:
                 return result
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No evidence found in any source.")
