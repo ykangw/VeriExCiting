@@ -172,3 +172,5 @@ cython_debug/
 .idea/*
 .DS_Store
 .streamlit/secrets.toml
+debug.ipynb
+/examples
