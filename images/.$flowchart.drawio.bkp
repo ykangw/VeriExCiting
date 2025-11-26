@@ -147,7 +147,7 @@
         <mxCell id="DQ2HW3JdWLyfmWPZhTO2-127" value="&lt;div&gt;&lt;br&gt;&lt;/div&gt;hbz (lobid.org) Search" style="strokeWidth=2;html=1;shape=mxgraph.flowchart.database;whiteSpace=wrap;fontSize=10;" parent="1" vertex="1">
           <mxGeometry x="214" y="570" width="110" height="60" as="geometry" />
         </mxCell>
-        <mxCell id="DQ2HW3JdWLyfmWPZhTO2-128" value="Match with&amp;nbsp;&lt;div&gt;lobid?&lt;/div&gt;" style="shape=rhombus;perimeter=rhombusPerimeter;whiteSpace=wrap;html=1;align=center;fontSize=10;" parent="1" vertex="1">
+        <mxCell id="DQ2HW3JdWLyfmWPZhTO2-128" value="Match with&amp;nbsp;&lt;div&gt;hbz&lt;span style=&quot;background-color: transparent; color: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));&quot;&gt;?&lt;/span&gt;&lt;/div&gt;" style="shape=rhombus;perimeter=rhombusPerimeter;whiteSpace=wrap;html=1;align=center;fontSize=10;" parent="1" vertex="1">
           <mxGeometry x="364" y="570" width="120" height="60" as="geometry" />
         </mxCell>
         <mxCell id="DQ2HW3JdWLyfmWPZhTO2-129" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" parent="1" source="DQ2HW3JdWLyfmWPZhTO2-127" target="DQ2HW3JdWLyfmWPZhTO2-128" edge="1">
