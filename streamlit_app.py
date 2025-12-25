@@ -155,7 +155,7 @@ def main():
                 st.success("Using Google Gemini API key from Streamlit secrets.")
             else:
                 st.write(
-                    "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio) with hundreds of requests per day for FREE.")
+                    "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio) with 20 requests per day for free.")
                 api_key = st.text_input("Enter your Google Gemini API key:", type="password")
 
         # Privacy notice for users
