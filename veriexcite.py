@@ -857,9 +857,16 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         Return only 'True' or 'False', without any additional explanation.
         """
 
-        response = grounded_search(prompt)
-        if response is None:
-            return search_unavailable()
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        google_search_tool = Tool(google_search=GoogleSearch())
+        response = client.models.generate_content(
+            model='gemini-flash-lite-latest',
+            contents=prompt,
+            config={
+                'tools': [google_search_tool],
+                'temperature': 0,
+            },
+        )
 
         if answers_true(response):
             return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
@@ -1049,9 +1056,15 @@ def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     Author: {ref.author}\n
     Title: {ref.title}\n"""
 
-    response = grounded_search(prompt)
-    if response is None:
-        return search_unavailable()
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    google_search_tool = Tool(google_search=GoogleSearch())
+    response = client.models.generate_content(
+        model='gemini-flash-lite-latest',
+        contents=prompt,
+        config={
+            'tools': [google_search_tool],
+        },
+    )
 
     if answers_true(response):
         return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")
