@@ -64,18 +64,32 @@ streamlit run streamlit_app.py
 
 **Set Google Gemini API Key:**
 
-- Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free up to 1500 requests per day!
+- Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). The free tier quota changes over time, but usually enough for casual use, see [Gemini API rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
 - Either set the key in code via `set_google_api_key`, export `GOOGLE_API_KEY` in your shell, or store it securely in `.streamlit/secrets.toml` (recommended, see below).
 
 **Optional: OpenAlex contact parameter**
 
 - Set the `OPENALEX_MAILTO` environment variable (or add it to `.streamlit/secrets.toml`) to include the polite contact parameter recommended by the OpenAlex API.
 
+**Optional: choosing Gemini models**
+
+Two Gemini roles are configurable, so you can follow new model releases to select models fit your needs:
+
+| Variable | Default                 | Used for |
+| --- |-------------------------| --- |
+| `GEMINI_PARSE_MODEL` | `gemini-3.5-flash-lite` | Parsing the bibliography into structured data (one call per document) |
+| `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash-lite` | Google Search grounded lookups (one call per unresolved reference) |
+
+Note on `GEMINI_SEARCH_MODEL`: this role needs the Google Search grounding tool, and on the free
+tier that tool is only granted to the Gemini 2.5 family.
+
 **Example `.streamlit/secrets.toml`**
 
 ```toml
 GOOGLE_API_KEY = "your-google-key"
-OPENALEX_MAILTO = "your.email@example.com"
+OPENALEX_MAILTO = "your.email@example.com"  # optional, but recommended
+GEMINI_PARSE_MODEL = "gemini-3.5-flash-lite"  # optional
+GEMINI_SEARCH_MODEL = "gemini-2.5-flash-lite"  # optional
 ```
 
 When `GOOGLE_API_KEY` is present in secrets the Streamlit sidebar hides the manual input box; otherwise it prompts for a key.
@@ -123,6 +137,7 @@ This creates a `VeriExCite results.csv` file in the current directory, including
 - **Validated:** References that were successfully matched in Crossref, Google Scholar, Arxiv (academic references), and Google Search (non-academic websites). If a DOI is provided and matches, the reference is strongly validated. If a DOI is provided but does not match, the reference is flagged as **Invalid**.
 - **Invalid:** References that are explicitly flagged as incorrect, such as when a DOI is provided but does not match the Crossref record, or when author/title do not match authoritative sources.
 - **Not Found (unverified):** References that could _not_ be verified in any source.
+- **Not Checked:** A source could not be consulted at all, typically because the Gemini quota is exhausted. That source is skipped and the remaining references are still verified. This is _not_ evidence of a fabricated reference; re-run once quota resets.
 - **Warning List:** The raw text of the unverified or invalid references.
 - **Explanations:** For each reference, a detailed explanation is provided, indicating the reason for its status (e.g., "DOI does not match Crossref record", "Author and title match Google Scholar", etc.).
 

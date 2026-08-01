@@ -1,14 +1,24 @@
+import io
+import os
+
+import pandas as pd
+import PyPDF2
 import streamlit as st
-from veriexcite import (
+
+# Expose configuration stored in Streamlit secrets as environment variables, so that
+# veriexcite reads the same settings whether it runs on Streamlit Cloud or locally.
+# Must run before importing veriexcite, which reads some of these at import time.
+for _key in ("GEMINI_PARSE_MODEL", "GEMINI_SEARCH_MODEL", "OPENALEX_MAILTO", "OPENALEX_DATA_VERSION"):
+    if _key not in os.environ and _key in st.secrets:
+        os.environ[_key] = str(st.secrets[_key])
+
+from veriexcite import (  # noqa: E402  (must follow the secrets-to-env bridge above)
     extract_bibliography_section,
     split_references,
     search_title,
     set_google_api_key,
-    ReferenceStatus,  # new import
+    ReferenceStatus,
 )
-import io
-import pandas as pd
-import PyPDF2
 
 
 def extract_text_from_pdf(pdf_file: st.runtime.uploaded_file_manager.UploadedFile) -> str:
@@ -43,6 +53,7 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
         "validated": "✅Validated",
         "invalid": "❌Invalid",
         "not_found": "⚠️Not Found",
+        "unchecked": "⏭️Not Checked",
         "Pending": "⏳Pending"
     }
 
@@ -96,7 +107,16 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
 
     verified_count = 0
     warning_count = 0
-    progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
+    unchecked_count = 0
+
+    def progress_line() -> str:
+        line = f"Validated: {verified_count} | Invalid/Not Found: {warning_count}"
+        # Kept separate from the warning count: these were skipped, not judged suspicious.
+        if unchecked_count:
+            line += f" | Not Checked: {unchecked_count}"
+        return line
+
+    progress_text.text(progress_line())
 
     for index, row in df.iterrows():
         result = search_title(references[index])
@@ -104,13 +124,15 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
         df.loc[index, "Explanation"] = result.explanation
         if result.status == ReferenceStatus.VALIDATED:
             verified_count += 1
+        elif result.status == ReferenceStatus.UNCHECKED:
+            unchecked_count += 1
         else:
             warning_count += 1
         df_display = df[[
             'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']].copy()
         df_display.index = df_display.index + 1  # keep human-readable numbering
         placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
-        progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
+        progress_text.text(progress_line())
 
     return df
 

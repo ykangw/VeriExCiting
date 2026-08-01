@@ -1,6 +1,7 @@
 import PyPDF2
 from pydantic import BaseModel
 import requests
+import io
 import os
 import pandas as pd
 import re
@@ -8,10 +9,10 @@ from unidecode import unidecode
 from scholarly import scholarly
 # from scholarly import ProxyGenerator
 import logging
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
-from google.genai.types import Tool, GoogleSearch, ThinkingConfig
+from google.genai.types import Tool, GoogleSearch
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from enum import Enum
@@ -24,8 +25,19 @@ from enum import Enum
 GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
-OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
+# Unset by default: OpenAlex rejects the retired data-version=1 with a 400, and omitting the
+# parameter tracks whatever version is current. Set it only to pin a specific version.
+OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION")
 LOBID_BASE_URL = "https://lobid.org/resources/search"
+
+# Default Gemini models per role, override with GEMINI_PARSE_MODEL / GEMINI_SEARCH_MODEL
+DEFAULT_MODELS = {
+    "PARSE": "gemini-3.5-flash-lite",
+    "SEARCH": "gemini-2.5-flash-lite",
+}
+
+MAX_URL_DOWNLOAD_BYTES = 10 * 1024 * 1024  # Covers ordinary reports; stops a huge PDF from filling memory.
+
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -44,6 +56,43 @@ def set_google_api_key(api_key: str):
     """Set Google Gemini API key."""
     global GOOGLE_API_KEY
     GOOGLE_API_KEY = api_key
+
+
+def generate_content(role: str, contents, config):
+    """Call Gemini with the model configured for the given role (see DEFAULT_MODELS)."""
+    model = os.getenv(f"GEMINI_{role}_MODEL") or DEFAULT_MODELS[role]
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    return client.models.generate_content(model=model, contents=contents, config=config)
+
+
+def grounded_search(prompt: str):
+    """Run a Google Search grounded lookup, or return None if it could not be run.
+
+    A quota error or any other Gemini failure must not abort the whole batch: the caller skips
+    this source and reports UNCHECKED, so the remaining references are still verified.
+    Caught inside the call so the @retry decorators do not spend backoff on a dead quota.
+    """
+    try:
+        return generate_content(
+            "SEARCH",
+            contents=prompt,
+            config={
+                'tools': [Tool(google_search=GoogleSearch())],
+                'temperature': 0,
+            },
+        )
+    except Exception as e:
+        logging.warning(f"Google Search unavailable, skipping this source: {e}")
+        return None
+
+
+def answers_true(response) -> bool:
+    """True if a grounded yes/no response affirms the reference exists.
+    A grounded call that finds nothing comes back with finish_reason STOP but no parts at all,
+    so an empty response must read as 'not found' rather than raise.
+    """
+    answer = normalize_title(response.text or "")
+    return answer.startswith('true') or answer.endswith('true')
 
 
 # --- Step 1: Read PDF and extract bibliography section ---
@@ -109,10 +158,21 @@ class ReferenceStatus(Enum):
     VALIDATED = "validated"
     INVALID = "invalid"
     NOT_FOUND = "not_found"
+    # A check could not be run at all (e.g. the Gemini quota is exhausted). Distinct from
+    # NOT_FOUND on purpose: no answer is not evidence that a reference was fabricated.
+    UNCHECKED = "unchecked"
 
 class ReferenceCheckResult(BaseModel):
     status: ReferenceStatus
     explanation: str
+
+
+def search_unavailable() -> ReferenceCheckResult:
+    """Result used when a Google Search backed check had to be skipped."""
+    return ReferenceCheckResult(
+        status=ReferenceStatus.UNCHECKED,
+        explanation="Google Search unavailable (Gemini quota or API error); this source was skipped.",
+    )
 
 def split_references(bib_text):
     """Splits the bibliography text into individual references using the Google Gemini API."""
@@ -131,15 +191,15 @@ def split_references(bib_text):
     - Bib: Normalised input bibliography (correct format, in one line)\n\n
     """
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content(
+        "PARSE",
         contents=prompt + bib_text,
         config={
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
             'temperature': 0,
-            'thinking_config': ThinkingConfig(thinking_budget=0),
+            # No thinking_config: the Gemini 3.x family rejects thinking_budget=0 with a
+            # 400 INVALID_ARGUMENT, and its default (dynamic) budget is fine for this task.
         },
     )
 
@@ -156,6 +216,27 @@ def normalize_title(title: str) -> str:
     title = re.sub(r'\band\b|\bthe\b', '', title)  # Remove 'and' and 'the'
     title = re.sub(r'\s+', '', title).strip()  # Remove extra whitespace
     return title
+
+
+TITLE_FUZZ_THRESHOLD = 85
+
+
+def classify_title_match(candidate: str, reference: str) -> Optional[str]:
+    """Returns 'exact', 'partial', 'fuzzy', or None for two normalize_title() outputs.
+
+    This is the comparison every source in this module makes; keeping it in one place means the
+    threshold and the containment rule are tuned once. Callers pass already-normalized strings so
+    a loop over candidate records can hoist the reference title's normalization out.
+    """
+    if not candidate or not reference:
+        return None
+    if candidate == reference:
+        return "exact"
+    if reference in candidate or candidate in reference:
+        return "partial"
+    if fuzz.ratio(candidate, reference) > TITLE_FUZZ_THRESHOLD:
+        return "fuzzy"
+    return None
 
 
 def normalize_author_name(author: str) -> str:
@@ -197,13 +278,10 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
         # Check if the first author's family name and title match
         if result and 'bib' in result and 'author' in result['bib'] and 'title' in result['bib']:
             if result['bib']['author'][0].split()[-1] == ref.author:
-                normalized_item_title = normalize_title(result['bib']['title'])
-                if normalized_item_title == normalized_input_title:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (exact match).")
-                if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (partial match).")
-                if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (fuzzy match).")
+                match_type = classify_title_match(normalize_title(result['bib']['title']), normalized_input_title)
+                if match_type:
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                                explanation=f"Author and title match Google Scholar ({match_type} match).")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Google Scholar.")
     except Exception as e:
         message = str(e)
@@ -220,13 +298,16 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
 def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches OpenAlex for the reference."""
     try:
+        title_query = re.sub(r"[,|]", " ", ref.title).strip()
         params = {
-            "search": ref.title,
             "per-page": 5,
-            "data-version": OPENALEX_DATA_VERSION,
+            "filter": f"title.search:{title_query}",
         }
-        if ref.year:
-            params["filter"] = f"from_publication_date:{ref.year}-01-01,to_publication_date:{ref.year}-12-31"
+        if OPENALEX_DATA_VERSION:
+            params["data-version"] = OPENALEX_DATA_VERSION
+        # Deliberately no publication-date filter: OpenAlex often records a different year than
+        # the citation (e.g. a later reissue), which would drop otherwise valid matches. The
+        # title and author comparison below is what establishes the match.
         if OPENALEX_MAILTO:
             params["mailto"] = OPENALEX_MAILTO
 
@@ -262,10 +343,7 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
             item_title = item.get("display_name")
             if not item_title:
                 continue
-            normalized_item_title = normalize_title(item_title)
-            title_exact_match = normalized_item_title == normalized_input_title
-            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+            match_type = classify_title_match(normalize_title(item_title), normalized_input_title)
 
             # Prefer DOI match when available
             item_doi = item.get("ids", {}).get("doi")
@@ -273,7 +351,7 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 if _normalize_doi(ref.DOI) == _normalize_doi(item_doi):
                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="DOI matches OpenAlex record.")
 
-            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+            if not match_type:
                 continue
 
             author_match = False
@@ -284,7 +362,6 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         author_match = True
                         break
 
-            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
             if author_match or not normalized_ref_author:
                 explanation = f"Author and title match OpenAlex record ({match_type} title match)."
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
@@ -446,12 +523,8 @@ def search_title_lobid(ref: ReferenceExtraction) -> ReferenceCheckResult:
             item_title = item.get("title")
             if not item_title:
                 continue
-            normalized_item_title = normalize_title(item_title)
-            title_exact_match = normalized_item_title == normalized_input_title
-            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-
-            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+            match_type = classify_title_match(normalize_title(item_title), normalized_input_title)
+            if not match_type:
                 continue
 
             author_match = False
@@ -465,7 +538,6 @@ def search_title_lobid(ref: ReferenceExtraction) -> ReferenceCheckResult:
             else:
                 author_match = True
 
-            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
             publication_year = _extract_year_from_publication(item.get("publication", []))
 
             if author_match:
@@ -526,14 +598,11 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         author_match = ref.author == item['author'][0]['family']
                 
                 # Title matching with different levels of strictness
-                title_exact_match = normalized_item_title == normalized_input_title
-                title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-                
-                if title_exact_match or title_partial_match or title_fuzzy_match:
+                match_type = classify_title_match(normalized_item_title, normalized_input_title)
+
+                if match_type:
                     if author_match:
-                        match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
                                                   explanation=f"DOI, author and title match Crossref record ({match_type} title match).")
                     else:
                         return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
@@ -568,13 +637,10 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         if item_author:
                             author_match = normalize_author_name(item_author) == normalize_author_name(ref.author)
 
-                    title_exact_match = normalized_item_title == normalized_input_title
-                    title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                    title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+                    match_type = classify_title_match(normalized_item_title, normalized_input_title)
 
-                    if title_exact_match or title_partial_match or title_fuzzy_match:
+                    if match_type:
                         if author_match:
-                            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
                             return ReferenceCheckResult(
                                 status=ReferenceStatus.VALIDATED,
                                 explanation=f"DOI resolved via doi.org (CSL JSON); title and author match ({match_type})."
@@ -665,13 +731,10 @@ def search_title_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                             item_title = item['title'][0]
                             normalized_item_title = normalize_title(item_title)
                             
-                            title_exact_match = normalized_item_title == normalized_input_title
-                            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-                            
-                            if title_exact_match or title_partial_match or title_fuzzy_match:
+                            match_type = classify_title_match(normalized_item_title, normalized_input_title)
+
+                            if match_type:
                                 item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
-                                match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
                                 title_author_matches.append((item, match_type, item_doi))
             
             # If we found title and author matches
@@ -738,17 +801,14 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
             for entry in entries:
                 title_tag = entry.find('title')
                 if title_tag:
-                    arxiv_title = title_tag.text.strip()
-                    normalized_arxiv_title = normalize_title(arxiv_title)
-                    
-                    # More flexible title matching
-                    if normalized_arxiv_title == normalized_input_title:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (exact match).")
-                    if normalized_input_title in normalized_arxiv_title or normalized_arxiv_title in normalized_input_title:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (partial match).")
-                    if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 85:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (fuzzy match).")
-                        
+                    normalized_arxiv_title = normalize_title(title_tag.text.strip())
+
+                    match_type = classify_title_match(normalized_arxiv_title, normalized_input_title)
+                    if match_type:
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                                    explanation=f"Title match in arXiv ({match_type} match).")
+
+
                     # Check authors if titles are somewhat similar
                     if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 70:
                         author_tags = entry.find_all('author')
@@ -797,19 +857,11 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         Return only 'True' or 'False', without any additional explanation.
         """
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        google_search_tool = Tool(google_search=GoogleSearch())
-        response = client.models.generate_content(
-            model='gemini-flash-lite-latest',
-            contents=prompt,
-            config={
-                'tools': [google_search_tool],
-                'temperature': 0,
-            },
-        )
+        response = grounded_search(prompt)
+        if response is None:
+            return search_unavailable()
 
-        answer = normalize_title(response.candidates[0].content.parts[0].text)
-        if answer.startswith('true') or answer.endswith('true'):
+        if answers_true(response):
             return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
         else:
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Workshop paper not found via Google search.")
@@ -818,6 +870,104 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         logging.warning(f"Workshop paper search failed for title '{ref.title}': {e}")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Workshop paper search failed: {e}")
 
+MIN_TITLE_LEN_FOR_CONTAINMENT = 15  # Shorter normalized titles hit inside a page of text by accident.
+MIN_PAGE_TEXT_FOR_MISMATCH = 60  # Below this the first page is effectively blank (scanned image).
+PAGE_TEXT_FUZZ_THRESHOLD = 90  # Higher than TITLE_FUZZ_THRESHOLD: a title inside a page of text, not two titles.
+
+
+def _read_capped(response) -> bytes:
+    """Reads at most MAX_URL_DOWNLOAD_BYTES from a streamed response."""
+    buf = bytearray()
+    for chunk in response.iter_content(chunk_size=65536):
+        buf += chunk[:MAX_URL_DOWNLOAD_BYTES - len(buf)]
+        if len(buf) >= MAX_URL_DOWNLOAD_BYTES:
+            break
+    return bytes(buf)
+
+
+def _extract_pdf_titles(data: bytes) -> Tuple[str, str]:
+    """Returns (metadata title, first page text) for PDF bytes, empty strings when unreadable."""
+    try:
+        reader = PyPDF2.PdfReader(io.BytesIO(data), strict=False)
+    except Exception as e:
+        logging.info(f"Could not parse linked PDF: {e}")
+        return "", ""
+
+    # Two independent best-effort reads: a broken metadata dictionary must not cost us the page text.
+    meta_title, first_page_text = "", ""
+    try:
+        if reader.metadata and reader.metadata.title:
+            meta_title = str(reader.metadata.title).strip()
+    except Exception as e:
+        logging.info(f"Could not read linked PDF metadata: {e}")
+    try:
+        if reader.pages:
+            first_page_text = reader.pages[0].extract_text() or ""
+    except Exception as e:
+        logging.info(f"Could not extract text from linked PDF: {e}")
+
+    return meta_title, first_page_text
+
+
+def match_pdf_title(ref: ReferenceExtraction, data: bytes) -> ReferenceCheckResult:
+    """Compares the reference title against a downloaded PDF.
+
+    Reading the document locally rather than handing it to a model costs no Gemini quota and keeps
+    attacker-supplied document text out of a prompt that answers yes/no about the same reference.
+
+    NOT_FOUND means the PDF carried no readable title evidence at all (scanned pages, an encrypted
+    file, or a download truncated at MAX_URL_DOWNLOAD_BYTES), so the caller should fall back rather
+    than report a mismatch it cannot support.
+    """
+    normalized_input = normalize_title(ref.title)
+    if not normalized_input:
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                    explanation="Reference has no title to compare against the linked PDF.")
+
+    meta_title, page_text = _extract_pdf_titles(data)
+
+    match_type = classify_title_match(normalize_title(meta_title), normalized_input)
+    if match_type:
+        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                    explanation=f"Linked PDF metadata title matches the reference title ({match_type} title match).")
+
+    # Titles wrap across lines on a title page. normalize_title strips whitespace, so a wrapped
+    # title becomes contiguous again and partial_ratio is the right test against the page text.
+    normalized_page = normalize_title(page_text)
+    if (len(normalized_input) >= MIN_TITLE_LEN_FOR_CONTAINMENT
+            and fuzz.partial_ratio(normalized_input, normalized_page) > PAGE_TEXT_FUZZ_THRESHOLD):
+        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                    explanation="Reference title found on the first page of the linked PDF.")
+
+    # A metadata title is often authoring-tool junk ("Microsoft Word - draft.doc") or absent, so it
+    # is good enough to confirm a match but never to reject one. Only a first page that actually
+    # carries text justifies INVALID; a scanned or blank one reports no evidence and falls back.
+    if len(normalized_page) >= MIN_PAGE_TEXT_FOR_MISMATCH:
+        return ReferenceCheckResult(status=ReferenceStatus.INVALID,
+                                    explanation="Linked PDF is reachable but its title does not match the reference title.")
+    return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                explanation="Linked PDF carries no readable title (scanned, encrypted, or too large to parse).")
+
+
+def with_google_fallback(ref: ReferenceExtraction, local_result: ReferenceCheckResult) -> ReferenceCheckResult:
+    """Lets a successful Google search override a local mismatch before it is reported as invalid."""
+    google_result = search_title_google(ref)
+    if google_result.status == ReferenceStatus.VALIDATED:
+        return google_result
+    return local_result
+
+
+def verify_pdf_url(ref: ReferenceExtraction, data: bytes) -> ReferenceCheckResult:
+    """Verifies a reference against the PDF its URL points to, falling back to search."""
+    pdf_result = match_pdf_title(ref, data)
+    if pdf_result.status == ReferenceStatus.VALIDATED:
+        return pdf_result
+    if pdf_result.status == ReferenceStatus.NOT_FOUND:
+        logging.info(f"No usable title in linked PDF: {ref.URL}. Falling back to Google search.")
+        return search_title_google(ref)
+    return with_google_fallback(ref, pdf_result)
+
+
 def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """
     Verifies if the title on the webpage at the given URL matches the reference title.
@@ -825,10 +975,26 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
     if not ref.URL:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No URL provided.")
 
+    content, is_pdf, blocked = b"", False, False
     try:
-        response = requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS)
-        if response.status_code == 403:
-            logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+        with requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS, stream=True) as response:
+            blocked = response.status_code == 403
+            if blocked:
+                logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+            else:
+                response.raise_for_status()
+                is_pdf = "application/pdf" in response.headers.get("Content-Type", "").lower()
+                declared = response.headers.get("Content-Length", "")
+                if is_pdf and declared.isdigit() and int(declared) > MAX_URL_DOWNLOAD_BYTES:
+                    # A PDF truncated at the cap has no trailer left to parse, so downloading a
+                    # known-oversized one buys nothing. Truncated HTML still yields its <title>.
+                    logging.info(f"Linked PDF exceeds the {MAX_URL_DOWNLOAD_BYTES} byte cap, not downloaded: {ref.URL}")
+                else:
+                    content = _read_capped(response)
+                    is_pdf = is_pdf or content.startswith(b"%PDF-")
+        # The connection is released before any of the search fallbacks below make their own call.
+
+        if blocked:
             google_result = search_title_google(ref)
             if google_result.status == ReferenceStatus.NOT_FOUND:
                 return ReferenceCheckResult(
@@ -836,8 +1002,11 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
                     explanation="Website blocked automated access (HTTP 403). Unable to confirm via direct fetch."
                 )
             return google_result
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+
+        if is_pdf:
+            return verify_pdf_url(ref, content)
+
+        soup = BeautifulSoup(content, 'html.parser')
         title_tag = soup.find('title')
 
         if title_tag:
@@ -850,13 +1019,10 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
             elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (partial match).")
             logging.info(f"Webpage title '{webpage_title}' does not match reference '{ref.title}'. Falling back to Google search.")
-            google_result = search_title_google(ref)
-            if google_result.status == ReferenceStatus.VALIDATED:
-                return google_result
-            return ReferenceCheckResult(
+            return with_google_fallback(ref, ReferenceCheckResult(
                 status=ReferenceStatus.INVALID,
                 explanation="URL reachable but webpage title does not match the reference title."
-            )
+            ))
         else:
             logging.warning(f"No <title> tag found at URL: {ref.URL}")
             return search_title_google(ref)
@@ -883,18 +1049,11 @@ def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     Author: {ref.author}\n
     Title: {ref.title}\n"""
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    google_search_tool = Tool(google_search=GoogleSearch())
-    response = client.models.generate_content(
-        model='gemini-flash-lite-latest',
-        contents=prompt,
-        config={
-            'tools': [google_search_tool],
-        },
-    )
+    response = grounded_search(prompt)
+    if response is None:
+        return search_unavailable()
 
-    answer = normalize_title(response.candidates[0].content.parts[0].text)
-    if answer.startswith('true') or answer.endswith('true'):
+    if answers_true(response):
         return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")
     else:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Google search did not find matching reference.")
