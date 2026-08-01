@@ -75,10 +75,10 @@ streamlit run streamlit_app.py
 
 Two Gemini roles are configurable, so you can follow new model releases to select models fit your needs:
 
-| Variable | Default | Used for |
-| --- | --- | --- |
+| Variable | Default                 | Used for |
+| --- |-------------------------| --- |
 | `GEMINI_PARSE_MODEL` | `gemini-3.5-flash-lite` | Parsing the bibliography into structured data (one call per document) |
-| `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash` | Google Search grounded lookups (one call per unresolved reference) |
+| `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash-lite` | Google Search grounded lookups (one call per unresolved reference) |
 
 Note on `GEMINI_SEARCH_MODEL`: this role needs the Google Search grounding tool, and on the free
 tier that tool is only granted to the Gemini 2.5 family.
@@ -89,7 +89,7 @@ tier that tool is only granted to the Gemini 2.5 family.
 GOOGLE_API_KEY = "your-google-key"
 OPENALEX_MAILTO = "your.email@example.com"  # optional, but recommended
 GEMINI_PARSE_MODEL = "gemini-3.5-flash-lite"  # optional
-GEMINI_SEARCH_MODEL = "gemini-2.5-flash"  # optional
+GEMINI_SEARCH_MODEL = "gemini-2.5-flash-lite"  # optional
 ```
 
 When `GOOGLE_API_KEY` is present in secrets the Streamlit sidebar hides the manual input box; otherwise it prompts for a key.

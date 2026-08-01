@@ -33,7 +33,7 @@ LOBID_BASE_URL = "https://lobid.org/resources/search"
 # Default Gemini models per role, override with GEMINI_PARSE_MODEL / GEMINI_SEARCH_MODEL
 DEFAULT_MODELS = {
     "PARSE": "gemini-3.5-flash-lite",
-    "SEARCH": "gemini-2.5-flash",
+    "SEARCH": "gemini-2.5-flash-lite",
 }
 
 MAX_URL_DOWNLOAD_BYTES = 10 * 1024 * 1024  # Covers ordinary reports; stops a huge PDF from filling memory.
@@ -857,16 +857,9 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         Return only 'True' or 'False', without any additional explanation.
         """
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        google_search_tool = Tool(google_search=GoogleSearch())
-        response = client.models.generate_content(
-            model='gemini-flash-lite-latest',
-            contents=prompt,
-            config={
-                'tools': [google_search_tool],
-                'temperature': 0,
-            },
-        )
+        response = grounded_search(prompt)
+        if response is None:
+            return search_unavailable()
 
         if answers_true(response):
             return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
@@ -1056,15 +1049,9 @@ def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     Author: {ref.author}\n
     Title: {ref.title}\n"""
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    google_search_tool = Tool(google_search=GoogleSearch())
-    response = client.models.generate_content(
-        model='gemini-flash-lite-latest',
-        contents=prompt,
-        config={
-            'tools': [google_search_tool],
-        },
-    )
+    response = grounded_search(prompt)
+    if response is None:
+        return search_unavailable()
 
     if answers_true(response):
         return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")
