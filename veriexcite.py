@@ -8,7 +8,7 @@ from unidecode import unidecode
 from scholarly import scholarly
 # from scholarly import ProxyGenerator
 import logging
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
 from google.genai.types import Tool, GoogleSearch
@@ -215,6 +215,27 @@ def normalize_title(title: str) -> str:
     return title
 
 
+TITLE_FUZZ_THRESHOLD = 85
+
+
+def classify_title_match(candidate: str, reference: str) -> Optional[str]:
+    """Returns 'exact', 'partial', 'fuzzy', or None for two normalize_title() outputs.
+
+    This is the comparison every source in this module makes; keeping it in one place means the
+    threshold and the containment rule are tuned once. Callers pass already-normalized strings so
+    a loop over candidate records can hoist the reference title's normalization out.
+    """
+    if not candidate or not reference:
+        return None
+    if candidate == reference:
+        return "exact"
+    if reference in candidate or candidate in reference:
+        return "partial"
+    if fuzz.ratio(candidate, reference) > TITLE_FUZZ_THRESHOLD:
+        return "fuzzy"
+    return None
+
+
 def normalize_author_name(author: str) -> str:
     """Returns a lowercase surname/organization token for comparison."""
     if not author:
@@ -254,13 +275,10 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
         # Check if the first author's family name and title match
         if result and 'bib' in result and 'author' in result['bib'] and 'title' in result['bib']:
             if result['bib']['author'][0].split()[-1] == ref.author:
-                normalized_item_title = normalize_title(result['bib']['title'])
-                if normalized_item_title == normalized_input_title:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (exact match).")
-                if normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (partial match).")
-                if fuzz.ratio(normalized_item_title, normalized_input_title) > 85:
-                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Author and title match Google Scholar (fuzzy match).")
+                match_type = classify_title_match(normalize_title(result['bib']['title']), normalized_input_title)
+                if match_type:
+                    return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                                explanation=f"Author and title match Google Scholar ({match_type} match).")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No matching record found in Google Scholar.")
     except Exception as e:
         message = str(e)
@@ -322,10 +340,7 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
             item_title = item.get("display_name")
             if not item_title:
                 continue
-            normalized_item_title = normalize_title(item_title)
-            title_exact_match = normalized_item_title == normalized_input_title
-            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+            match_type = classify_title_match(normalize_title(item_title), normalized_input_title)
 
             # Prefer DOI match when available
             item_doi = item.get("ids", {}).get("doi")
@@ -333,7 +348,7 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
                 if _normalize_doi(ref.DOI) == _normalize_doi(item_doi):
                     return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="DOI matches OpenAlex record.")
 
-            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+            if not match_type:
                 continue
 
             author_match = False
@@ -344,7 +359,6 @@ def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         author_match = True
                         break
 
-            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
             if author_match or not normalized_ref_author:
                 explanation = f"Author and title match OpenAlex record ({match_type} title match)."
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation=explanation)
@@ -506,12 +520,8 @@ def search_title_lobid(ref: ReferenceExtraction) -> ReferenceCheckResult:
             item_title = item.get("title")
             if not item_title:
                 continue
-            normalized_item_title = normalize_title(item_title)
-            title_exact_match = normalized_item_title == normalized_input_title
-            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-
-            if not (title_exact_match or title_partial_match or title_fuzzy_match):
+            match_type = classify_title_match(normalize_title(item_title), normalized_input_title)
+            if not match_type:
                 continue
 
             author_match = False
@@ -525,7 +535,6 @@ def search_title_lobid(ref: ReferenceExtraction) -> ReferenceCheckResult:
             else:
                 author_match = True
 
-            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
             publication_year = _extract_year_from_publication(item.get("publication", []))
 
             if author_match:
@@ -586,14 +595,11 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         author_match = ref.author == item['author'][0]['family']
                 
                 # Title matching with different levels of strictness
-                title_exact_match = normalized_item_title == normalized_input_title
-                title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-                
-                if title_exact_match or title_partial_match or title_fuzzy_match:
+                match_type = classify_title_match(normalized_item_title, normalized_input_title)
+
+                if match_type:
                     if author_match:
-                        match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, 
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
                                                   explanation=f"DOI, author and title match Crossref record ({match_type} title match).")
                     else:
                         return ReferenceCheckResult(status=ReferenceStatus.INVALID, 
@@ -628,13 +634,10 @@ def search_doi_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                         if item_author:
                             author_match = normalize_author_name(item_author) == normalize_author_name(ref.author)
 
-                    title_exact_match = normalized_item_title == normalized_input_title
-                    title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                    title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
+                    match_type = classify_title_match(normalized_item_title, normalized_input_title)
 
-                    if title_exact_match or title_partial_match or title_fuzzy_match:
+                    if match_type:
                         if author_match:
-                            match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
                             return ReferenceCheckResult(
                                 status=ReferenceStatus.VALIDATED,
                                 explanation=f"DOI resolved via doi.org (CSL JSON); title and author match ({match_type})."
@@ -725,13 +728,10 @@ def search_title_crossref(ref: ReferenceExtraction) -> ReferenceCheckResult:
                             item_title = item['title'][0]
                             normalized_item_title = normalize_title(item_title)
                             
-                            title_exact_match = normalized_item_title == normalized_input_title
-                            title_partial_match = normalized_input_title in normalized_item_title or normalized_item_title in normalized_input_title
-                            title_fuzzy_match = fuzz.ratio(normalized_item_title, normalized_input_title) > 85
-                            
-                            if title_exact_match or title_partial_match or title_fuzzy_match:
+                            match_type = classify_title_match(normalized_item_title, normalized_input_title)
+
+                            if match_type:
                                 item_doi = item.get('DOI', '').strip().lower() if 'DOI' in item else ''
-                                match_type = "exact" if title_exact_match else ("partial" if title_partial_match else "fuzzy")
                                 title_author_matches.append((item, match_type, item_doi))
             
             # If we found title and author matches
@@ -798,17 +798,14 @@ def search_title_arxiv(ref: ReferenceExtraction) -> ReferenceCheckResult:
             for entry in entries:
                 title_tag = entry.find('title')
                 if title_tag:
-                    arxiv_title = title_tag.text.strip()
-                    normalized_arxiv_title = normalize_title(arxiv_title)
-                    
-                    # More flexible title matching
-                    if normalized_arxiv_title == normalized_input_title:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (exact match).")
-                    if normalized_input_title in normalized_arxiv_title or normalized_arxiv_title in normalized_input_title:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (partial match).")
-                    if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 85:
-                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Title match in arXiv (fuzzy match).")
-                        
+                    normalized_arxiv_title = normalize_title(title_tag.text.strip())
+
+                    match_type = classify_title_match(normalized_arxiv_title, normalized_input_title)
+                    if match_type:
+                        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                                    explanation=f"Title match in arXiv ({match_type} match).")
+
+
                     # Check authors if titles are somewhat similar
                     if fuzz.ratio(normalized_arxiv_title, normalized_input_title) > 70:
                         author_tags = entry.find_all('author')
