@@ -1,6 +1,7 @@
 import PyPDF2
 from pydantic import BaseModel
 import requests
+import io
 import os
 import pandas as pd
 import re
@@ -34,6 +35,8 @@ DEFAULT_MODELS = {
     "PARSE": "gemini-3.5-flash-lite",
     "SEARCH": "gemini-2.5-flash",
 }
+
+MAX_URL_DOWNLOAD_BYTES = 10 * 1024 * 1024  # Covers ordinary reports; stops a huge PDF from filling memory.
 
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
@@ -867,6 +870,104 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         logging.warning(f"Workshop paper search failed for title '{ref.title}': {e}")
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation=f"Workshop paper search failed: {e}")
 
+MIN_TITLE_LEN_FOR_CONTAINMENT = 15  # Shorter normalized titles hit inside a page of text by accident.
+MIN_PAGE_TEXT_FOR_MISMATCH = 60  # Below this the first page is effectively blank (scanned image).
+PAGE_TEXT_FUZZ_THRESHOLD = 90  # Higher than TITLE_FUZZ_THRESHOLD: a title inside a page of text, not two titles.
+
+
+def _read_capped(response) -> bytes:
+    """Reads at most MAX_URL_DOWNLOAD_BYTES from a streamed response."""
+    buf = bytearray()
+    for chunk in response.iter_content(chunk_size=65536):
+        buf += chunk[:MAX_URL_DOWNLOAD_BYTES - len(buf)]
+        if len(buf) >= MAX_URL_DOWNLOAD_BYTES:
+            break
+    return bytes(buf)
+
+
+def _extract_pdf_titles(data: bytes) -> Tuple[str, str]:
+    """Returns (metadata title, first page text) for PDF bytes, empty strings when unreadable."""
+    try:
+        reader = PyPDF2.PdfReader(io.BytesIO(data), strict=False)
+    except Exception as e:
+        logging.info(f"Could not parse linked PDF: {e}")
+        return "", ""
+
+    # Two independent best-effort reads: a broken metadata dictionary must not cost us the page text.
+    meta_title, first_page_text = "", ""
+    try:
+        if reader.metadata and reader.metadata.title:
+            meta_title = str(reader.metadata.title).strip()
+    except Exception as e:
+        logging.info(f"Could not read linked PDF metadata: {e}")
+    try:
+        if reader.pages:
+            first_page_text = reader.pages[0].extract_text() or ""
+    except Exception as e:
+        logging.info(f"Could not extract text from linked PDF: {e}")
+
+    return meta_title, first_page_text
+
+
+def match_pdf_title(ref: ReferenceExtraction, data: bytes) -> ReferenceCheckResult:
+    """Compares the reference title against a downloaded PDF.
+
+    Reading the document locally rather than handing it to a model costs no Gemini quota and keeps
+    attacker-supplied document text out of a prompt that answers yes/no about the same reference.
+
+    NOT_FOUND means the PDF carried no readable title evidence at all (scanned pages, an encrypted
+    file, or a download truncated at MAX_URL_DOWNLOAD_BYTES), so the caller should fall back rather
+    than report a mismatch it cannot support.
+    """
+    normalized_input = normalize_title(ref.title)
+    if not normalized_input:
+        return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                    explanation="Reference has no title to compare against the linked PDF.")
+
+    meta_title, page_text = _extract_pdf_titles(data)
+
+    match_type = classify_title_match(normalize_title(meta_title), normalized_input)
+    if match_type:
+        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                    explanation=f"Linked PDF metadata title matches the reference title ({match_type} title match).")
+
+    # Titles wrap across lines on a title page. normalize_title strips whitespace, so a wrapped
+    # title becomes contiguous again and partial_ratio is the right test against the page text.
+    normalized_page = normalize_title(page_text)
+    if (len(normalized_input) >= MIN_TITLE_LEN_FOR_CONTAINMENT
+            and fuzz.partial_ratio(normalized_input, normalized_page) > PAGE_TEXT_FUZZ_THRESHOLD):
+        return ReferenceCheckResult(status=ReferenceStatus.VALIDATED,
+                                    explanation="Reference title found on the first page of the linked PDF.")
+
+    # A metadata title is often authoring-tool junk ("Microsoft Word - draft.doc") or absent, so it
+    # is good enough to confirm a match but never to reject one. Only a first page that actually
+    # carries text justifies INVALID; a scanned or blank one reports no evidence and falls back.
+    if len(normalized_page) >= MIN_PAGE_TEXT_FOR_MISMATCH:
+        return ReferenceCheckResult(status=ReferenceStatus.INVALID,
+                                    explanation="Linked PDF is reachable but its title does not match the reference title.")
+    return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND,
+                                explanation="Linked PDF carries no readable title (scanned, encrypted, or too large to parse).")
+
+
+def with_google_fallback(ref: ReferenceExtraction, local_result: ReferenceCheckResult) -> ReferenceCheckResult:
+    """Lets a successful Google search override a local mismatch before it is reported as invalid."""
+    google_result = search_title_google(ref)
+    if google_result.status == ReferenceStatus.VALIDATED:
+        return google_result
+    return local_result
+
+
+def verify_pdf_url(ref: ReferenceExtraction, data: bytes) -> ReferenceCheckResult:
+    """Verifies a reference against the PDF its URL points to, falling back to search."""
+    pdf_result = match_pdf_title(ref, data)
+    if pdf_result.status == ReferenceStatus.VALIDATED:
+        return pdf_result
+    if pdf_result.status == ReferenceStatus.NOT_FOUND:
+        logging.info(f"No usable title in linked PDF: {ref.URL}. Falling back to Google search.")
+        return search_title_google(ref)
+    return with_google_fallback(ref, pdf_result)
+
+
 def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """
     Verifies if the title on the webpage at the given URL matches the reference title.
@@ -874,10 +975,26 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
     if not ref.URL:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="No URL provided.")
 
+    content, is_pdf, blocked = b"", False, False
     try:
-        response = requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS)
-        if response.status_code == 403:
-            logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+        with requests.get(ref.URL, timeout=5, headers=DEFAULT_HTTP_HEADERS, stream=True) as response:
+            blocked = response.status_code == 403
+            if blocked:
+                logging.info(f"Access denied (403) when fetching URL: {ref.URL}")
+            else:
+                response.raise_for_status()
+                is_pdf = "application/pdf" in response.headers.get("Content-Type", "").lower()
+                declared = response.headers.get("Content-Length", "")
+                if is_pdf and declared.isdigit() and int(declared) > MAX_URL_DOWNLOAD_BYTES:
+                    # A PDF truncated at the cap has no trailer left to parse, so downloading a
+                    # known-oversized one buys nothing. Truncated HTML still yields its <title>.
+                    logging.info(f"Linked PDF exceeds the {MAX_URL_DOWNLOAD_BYTES} byte cap, not downloaded: {ref.URL}")
+                else:
+                    content = _read_capped(response)
+                    is_pdf = is_pdf or content.startswith(b"%PDF-")
+        # The connection is released before any of the search fallbacks below make their own call.
+
+        if blocked:
             google_result = search_title_google(ref)
             if google_result.status == ReferenceStatus.NOT_FOUND:
                 return ReferenceCheckResult(
@@ -885,8 +1002,11 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
                     explanation="Website blocked automated access (HTTP 403). Unable to confirm via direct fetch."
                 )
             return google_result
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+
+        if is_pdf:
+            return verify_pdf_url(ref, content)
+
+        soup = BeautifulSoup(content, 'html.parser')
         title_tag = soup.find('title')
 
         if title_tag:
@@ -899,13 +1019,10 @@ def verify_url(ref: ReferenceExtraction) -> ReferenceCheckResult:
             elif normalized_input_title in normalized_webpage_title or normalized_webpage_title in normalized_input_title:  #robust matching
                 return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Webpage title matches reference title (partial match).")
             logging.info(f"Webpage title '{webpage_title}' does not match reference '{ref.title}'. Falling back to Google search.")
-            google_result = search_title_google(ref)
-            if google_result.status == ReferenceStatus.VALIDATED:
-                return google_result
-            return ReferenceCheckResult(
+            return with_google_fallback(ref, ReferenceCheckResult(
                 status=ReferenceStatus.INVALID,
                 explanation="URL reachable but webpage title does not match the reference title."
-            )
+            ))
         else:
             logging.warning(f"No <title> tag found at URL: {ref.URL}")
             return search_title_google(ref)
