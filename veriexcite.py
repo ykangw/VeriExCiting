@@ -11,7 +11,7 @@ import logging
 from typing import List, Tuple
 from tenacity import retry, stop_after_attempt, wait_exponential
 from google import genai
-from google.genai.types import Tool, GoogleSearch, ThinkingConfig
+from google.genai.types import Tool, GoogleSearch
 from bs4 import BeautifulSoup
 from rapidfuzz import fuzz
 from enum import Enum
@@ -24,8 +24,17 @@ from enum import Enum
 GOOGLE_API_KEY = None
 OPENALEX_BASE_URL = "https://api.openalex.org/works"
 OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO")
-OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION", "1")
+# Unset by default: OpenAlex rejects the retired data-version=1 with a 400, and omitting the
+# parameter tracks whatever version is current. Set it only to pin a specific version.
+OPENALEX_DATA_VERSION = os.getenv("OPENALEX_DATA_VERSION")
 LOBID_BASE_URL = "https://lobid.org/resources/search"
+
+# Default Gemini models per role, override with GEMINI_PARSE_MODEL / GEMINI_SEARCH_MODEL
+DEFAULT_MODELS = {
+    "PARSE": "gemini-3.5-flash-lite",
+    "SEARCH": "gemini-2.5-flash",
+}
+
 DEFAULT_HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
@@ -44,6 +53,22 @@ def set_google_api_key(api_key: str):
     """Set Google Gemini API key."""
     global GOOGLE_API_KEY
     GOOGLE_API_KEY = api_key
+
+
+def generate_content(role: str, contents, config):
+    """Call Gemini with the model configured for the given role (see DEFAULT_MODELS)."""
+    model = os.getenv(f"GEMINI_{role}_MODEL") or DEFAULT_MODELS[role]
+    client = genai.Client(api_key=GOOGLE_API_KEY)
+    return client.models.generate_content(model=model, contents=contents, config=config)
+
+
+def answers_true(response) -> bool:
+    """True if a grounded yes/no response affirms the reference exists.
+    A grounded call that finds nothing comes back with finish_reason STOP but no parts at all,
+    so an empty response must read as 'not found' rather than raise.
+    """
+    answer = normalize_title(response.text or "")
+    return answer.startswith('true') or answer.endswith('true')
 
 
 # --- Step 1: Read PDF and extract bibliography section ---
@@ -131,15 +156,15 @@ def split_references(bib_text):
     - Bib: Normalised input bibliography (correct format, in one line)\n\n
     """
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    response = client.models.generate_content(
-        model='gemini-2.5-flash',
+    response = generate_content(
+        "PARSE",
         contents=prompt + bib_text,
         config={
             'response_mime_type': 'application/json',
             'response_schema': list[ReferenceExtraction],
             'temperature': 0,
-            'thinking_config': ThinkingConfig(thinking_budget=0),
+            # No thinking_config: the Gemini 3.x family rejects thinking_budget=0 with a
+            # 400 INVALID_ARGUMENT, and its default (dynamic) budget is fine for this task.
         },
     )
 
@@ -220,13 +245,16 @@ def search_title_scholarly(ref: ReferenceExtraction) -> ReferenceCheckResult:
 def search_title_openalex(ref: ReferenceExtraction) -> ReferenceCheckResult:
     """Searches OpenAlex for the reference."""
     try:
+        title_query = re.sub(r"[,|]", " ", ref.title).strip()
         params = {
-            "search": ref.title,
             "per-page": 5,
-            "data-version": OPENALEX_DATA_VERSION,
+            "filter": f"title.search:{title_query}",
         }
-        if ref.year:
-            params["filter"] = f"from_publication_date:{ref.year}-01-01,to_publication_date:{ref.year}-12-31"
+        if OPENALEX_DATA_VERSION:
+            params["data-version"] = OPENALEX_DATA_VERSION
+        # Deliberately no publication-date filter: OpenAlex often records a different year than
+        # the citation (e.g. a later reissue), which would drop otherwise valid matches. The
+        # title and author comparison below is what establishes the match.
         if OPENALEX_MAILTO:
             params["mailto"] = OPENALEX_MAILTO
 
@@ -797,19 +825,16 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         Return only 'True' or 'False', without any additional explanation.
         """
 
-        client = genai.Client(api_key=GOOGLE_API_KEY)
-        google_search_tool = Tool(google_search=GoogleSearch())
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
+        response = generate_content(
+            "SEARCH",
             contents=prompt,
             config={
-                'tools': [google_search_tool],
+                'tools': [Tool(google_search=GoogleSearch())],
                 'temperature': 0,
             },
         )
 
-        answer = normalize_title(response.candidates[0].content.parts[0].text)
-        if answer.startswith('true') or answer.endswith('true'):
+        if answers_true(response):
             return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
         else:
             return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Workshop paper not found via Google search.")
@@ -883,18 +908,15 @@ def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     Author: {ref.author}\n
     Title: {ref.title}\n"""
 
-    client = genai.Client(api_key=GOOGLE_API_KEY)
-    google_search_tool = Tool(google_search=GoogleSearch())
-    response = client.models.generate_content(
-        model='gemini-2.0-flash',
+    response = generate_content(
+        "SEARCH",
         contents=prompt,
         config={
-            'tools': [google_search_tool],
+            'tools': [Tool(google_search=GoogleSearch())],
         },
     )
 
-    answer = normalize_title(response.candidates[0].content.parts[0].text)
-    if answer.startswith('true') or answer.endswith('true'):
+    if answers_true(response):
         return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")
     else:
         return ReferenceCheckResult(status=ReferenceStatus.NOT_FOUND, explanation="Google search did not find matching reference.")

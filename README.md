@@ -64,18 +64,32 @@ streamlit run streamlit_app.py
 
 **Set Google Gemini API Key:**
 
-- Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). It's free up to 1500 requests per day!
+- Obtain an API key from [Google AI Studio](https://ai.google.dev/aistudio). The free tier quota changes over time, but usually enough for casual use, see [Gemini API rate limits](https://ai.google.dev/gemini-api/docs/rate-limits).
 - Either set the key in code via `set_google_api_key`, export `GOOGLE_API_KEY` in your shell, or store it securely in `.streamlit/secrets.toml` (recommended, see below).
 
 **Optional: OpenAlex contact parameter**
 
 - Set the `OPENALEX_MAILTO` environment variable (or add it to `.streamlit/secrets.toml`) to include the polite contact parameter recommended by the OpenAlex API.
 
+**Optional: choosing Gemini models**
+
+Two Gemini roles are configurable, so you can follow new model releases to select models fit your needs:
+
+| Variable | Default | Used for |
+| --- | --- | --- |
+| `GEMINI_PARSE_MODEL` | `gemini-3.5-flash-lite` | Parsing the bibliography into structured data (one call per document) |
+| `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash` | Google Search grounded lookups (one call per unresolved reference) |
+
+Note on `GEMINI_SEARCH_MODEL`: this role needs the Google Search grounding tool, and on the free
+tier that tool is only granted to the Gemini 2.5 family.
+
 **Example `.streamlit/secrets.toml`**
 
 ```toml
 GOOGLE_API_KEY = "your-google-key"
-OPENALEX_MAILTO = "your.email@example.com"
+OPENALEX_MAILTO = "your.email@example.com"  # optional, but recommended
+GEMINI_PARSE_MODEL = "gemini-3.5-flash-lite"  # optional
+GEMINI_SEARCH_MODEL = "gemini-2.5-flash"  # optional
 ```
 
 When `GOOGLE_API_KEY` is present in secrets the Streamlit sidebar hides the manual input box; otherwise it prompts for a key.

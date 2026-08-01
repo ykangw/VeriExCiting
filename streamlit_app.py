@@ -1,14 +1,24 @@
+import io
+import os
+
+import pandas as pd
+import PyPDF2
 import streamlit as st
-from veriexcite import (
+
+# Expose configuration stored in Streamlit secrets as environment variables, so that
+# veriexcite reads the same settings whether it runs on Streamlit Cloud or locally.
+# Must run before importing veriexcite, which reads some of these at import time.
+for _key in ("GEMINI_PARSE_MODEL", "GEMINI_SEARCH_MODEL", "OPENALEX_MAILTO", "OPENALEX_DATA_VERSION"):
+    if _key not in os.environ and _key in st.secrets:
+        os.environ[_key] = str(st.secrets[_key])
+
+from veriexcite import (  # noqa: E402  (must follow the secrets-to-env bridge above)
     extract_bibliography_section,
     split_references,
     search_title,
     set_google_api_key,
-    ReferenceStatus,  # new import
+    ReferenceStatus,
 )
-import io
-import pandas as pd
-import PyPDF2
 
 
 def extract_text_from_pdf(pdf_file: st.runtime.uploaded_file_manager.UploadedFile) -> str:
