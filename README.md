@@ -137,6 +137,7 @@ This creates a `VeriExCite results.csv` file in the current directory, including
 - **Validated:** References that were successfully matched in Crossref, Google Scholar, Arxiv (academic references), and Google Search (non-academic websites). If a DOI is provided and matches, the reference is strongly validated. If a DOI is provided but does not match, the reference is flagged as **Invalid**.
 - **Invalid:** References that are explicitly flagged as incorrect, such as when a DOI is provided but does not match the Crossref record, or when author/title do not match authoritative sources.
 - **Not Found (unverified):** References that could _not_ be verified in any source.
+- **Not Checked:** A source could not be consulted at all, typically because the Gemini quota is exhausted. That source is skipped and the remaining references are still verified. This is _not_ evidence of a fabricated reference; re-run once quota resets.
 - **Warning List:** The raw text of the unverified or invalid references.
 - **Explanations:** For each reference, a detailed explanation is provided, indicating the reason for its status (e.g., "DOI does not match Crossref record", "Author and title match Google Scholar", etc.).
 

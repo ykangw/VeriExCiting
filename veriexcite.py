@@ -62,6 +62,27 @@ def generate_content(role: str, contents, config):
     return client.models.generate_content(model=model, contents=contents, config=config)
 
 
+def grounded_search(prompt: str):
+    """Run a Google Search grounded lookup, or return None if it could not be run.
+
+    A quota error or any other Gemini failure must not abort the whole batch: the caller skips
+    this source and reports UNCHECKED, so the remaining references are still verified.
+    Caught inside the call so the @retry decorators do not spend backoff on a dead quota.
+    """
+    try:
+        return generate_content(
+            "SEARCH",
+            contents=prompt,
+            config={
+                'tools': [Tool(google_search=GoogleSearch())],
+                'temperature': 0,
+            },
+        )
+    except Exception as e:
+        logging.warning(f"Google Search unavailable, skipping this source: {e}")
+        return None
+
+
 def answers_true(response) -> bool:
     """True if a grounded yes/no response affirms the reference exists.
     A grounded call that finds nothing comes back with finish_reason STOP but no parts at all,
@@ -134,10 +155,21 @@ class ReferenceStatus(Enum):
     VALIDATED = "validated"
     INVALID = "invalid"
     NOT_FOUND = "not_found"
+    # A check could not be run at all (e.g. the Gemini quota is exhausted). Distinct from
+    # NOT_FOUND on purpose: no answer is not evidence that a reference was fabricated.
+    UNCHECKED = "unchecked"
 
 class ReferenceCheckResult(BaseModel):
     status: ReferenceStatus
     explanation: str
+
+
+def search_unavailable() -> ReferenceCheckResult:
+    """Result used when a Google Search backed check had to be skipped."""
+    return ReferenceCheckResult(
+        status=ReferenceStatus.UNCHECKED,
+        explanation="Google Search unavailable (Gemini quota or API error); this source was skipped.",
+    )
 
 def split_references(bib_text):
     """Splits the bibliography text into individual references using the Google Gemini API."""
@@ -825,14 +857,9 @@ def search_title_workshop_paper(ref: ReferenceExtraction) -> ReferenceCheckResul
         Return only 'True' or 'False', without any additional explanation.
         """
 
-        response = generate_content(
-            "SEARCH",
-            contents=prompt,
-            config={
-                'tools': [Tool(google_search=GoogleSearch())],
-                'temperature': 0,
-            },
-        )
+        response = grounded_search(prompt)
+        if response is None:
+            return search_unavailable()
 
         if answers_true(response):
             return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Workshop paper found via Google search.")
@@ -908,13 +935,9 @@ def search_title_google(ref: ReferenceExtraction) -> ReferenceCheckResult:
     Author: {ref.author}\n
     Title: {ref.title}\n"""
 
-    response = generate_content(
-        "SEARCH",
-        contents=prompt,
-        config={
-            'tools': [Tool(google_search=GoogleSearch())],
-        },
-    )
+    response = grounded_search(prompt)
+    if response is None:
+        return search_unavailable()
 
     if answers_true(response):
         return ReferenceCheckResult(status=ReferenceStatus.VALIDATED, explanation="Google search found matching reference.")

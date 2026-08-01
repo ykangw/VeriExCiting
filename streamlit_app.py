@@ -53,6 +53,7 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
         "validated": "✅Validated",
         "invalid": "❌Invalid",
         "not_found": "⚠️Not Found",
+        "unchecked": "⏭️Not Checked",
         "Pending": "⏳Pending"
     }
 
@@ -106,7 +107,16 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
 
     verified_count = 0
     warning_count = 0
-    progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
+    unchecked_count = 0
+
+    def progress_line() -> str:
+        line = f"Validated: {verified_count} | Invalid/Not Found: {warning_count}"
+        # Kept separate from the warning count: these were skipped, not judged suspicious.
+        if unchecked_count:
+            line += f" | Not Checked: {unchecked_count}"
+        return line
+
+    progress_text.text(progress_line())
 
     for index, row in df.iterrows():
         result = search_title(references[index])
@@ -114,13 +124,15 @@ def process_and_verify(bib_text: str) -> pd.DataFrame:
         df.loc[index, "Explanation"] = result.explanation
         if result.status == ReferenceStatus.VALIDATED:
             verified_count += 1
+        elif result.status == ReferenceStatus.UNCHECKED:
+            unchecked_count += 1
         else:
             warning_count += 1
         df_display = df[[
             'First Author', 'Year', 'Title', 'Type', 'URL', 'Raw Text', 'Status', 'Explanation']].copy()
         df_display.index = df_display.index + 1  # keep human-readable numbering
         placeholder.dataframe(df_display, use_container_width=True, column_config=column_config)
-        progress_text.text(f"Validated: {verified_count} | Invalid/Not Found: {warning_count}")
+        progress_text.text(progress_line())
 
     return df
 
