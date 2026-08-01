@@ -177,15 +177,13 @@ def main():
                 st.success("Using Google Gemini API key from Streamlit secrets.")
             else:
                 st.write(
-                    "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio) with 20 requests per day for free.")
+                    "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio), which includes some free requests per day.")
                 api_key = st.text_input("Enter your Google Gemini API key:", type="password")
 
         # Privacy notice for users
         st.info(
-            """
-            **Privacy Notice:** Uploaded PDF files and pasted text are processed only for extracting references. \
-            Files are handled in memory during processing and are not stored or shared. \
-            Only the extracted bibliography text is sent to the Google Gemini API for verification.""",
+            "**Privacy Notice:** Uploaded files and pasted text are processed in memory, never stored or shared."
+            "Only the extracted bibliography text is sent to Google Gemini.",
             icon="🔒"
         )
 
