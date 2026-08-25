@@ -5,7 +5,6 @@ from pathlib import Path
 import pandas as pd
 import PyPDF2
 import streamlit as st
-from streamlit.errors import StreamlitSecretNotFoundError
 
 
 def get_config_value(name: str) -> str:
@@ -24,7 +23,7 @@ def get_config_value(name: str) -> str:
 
     try:
         return st.secrets.get(name, "")
-    except StreamlitSecretNotFoundError:
+    except FileNotFoundError:
         return ""
 
 # Expose configuration stored in Streamlit secrets as environment variables, so that
