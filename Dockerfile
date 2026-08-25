@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PATH="/app/.venv/bin:$PATH" \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_SERVER_PORT=8501
@@ -21,7 +22,8 @@ RUN uv sync --frozen --no-dev
 COPY . .
 
 RUN adduser --disabled-password --gecos "" appuser \
-    && chown -R appuser:appuser /app
+    && mkdir -p /home/appuser/.streamlit \
+    && chown -R appuser:appuser /app /home/appuser/.streamlit
 
 USER appuser
 
