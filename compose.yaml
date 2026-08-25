@@ -1,0 +1,12 @@
+services:
+  app:
+    build:
+      context: .
+    environment:
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENALEX_MAILTO: ${OPENALEX_MAILTO:-}
+      OPENALEX_DATA_VERSION: ${OPENALEX_DATA_VERSION:-1}
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./.streamlit/secrets.toml:/home/appuser/.streamlit/secrets.toml:ro

@@ -1,23 +1,45 @@
 import io
 import os
+from pathlib import Path
 
 import pandas as pd
 import PyPDF2
 import streamlit as st
 
+
+def get_config_value(name: str) -> str:
+    """Read config from environment first, then Streamlit secrets if available."""
+    value = os.getenv(name)
+    if value:
+        return value
+
+    secrets_paths = (
+        Path("/app/.streamlit/secrets.toml"),
+        Path.home() / ".streamlit" / "secrets.toml",
+        Path(".streamlit/secrets.toml"),
+    )
+    if not any(path.exists() for path in secrets_paths):
+        return ""
+
+    try:
+        return st.secrets.get(name, "")
+    except FileNotFoundError:
+        return ""
+
 # Expose configuration stored in Streamlit secrets as environment variables, so that
 # veriexcite reads the same settings whether it runs on Streamlit Cloud or locally.
 # Must run before importing veriexcite, which reads some of these at import time.
 for _key in ("GEMINI_PARSE_MODEL", "GEMINI_SEARCH_MODEL", "OPENALEX_MAILTO", "OPENALEX_DATA_VERSION"):
-    if _key not in os.environ and _key in st.secrets:
-        os.environ[_key] = str(st.secrets[_key])
+    _value = get_config_value(_key)
+    if _key not in os.environ and _value:
+        os.environ[_key] = str(_value)
 
-from veriexcite import (  # noqa: E402  (must follow the secrets-to-env bridge above)
+from veriexcite import (
+    ReferenceStatus,
     extract_bibliography_section,
-    split_references,
     search_title,
     set_google_api_key,
-    ReferenceStatus,
+    split_references,
 )
 
 
@@ -160,8 +182,8 @@ def main():
             # help="Paste the bibliography section or any text containing references. "
         )
 
-        personal_api_key = st.secrets.get("GOOGLE_API_KEY")
-        developer_api_key = st.secrets.get("DEV_GOOGLE_API_KEY")
+        personal_api_key = get_config_value("GOOGLE_API_KEY")
+        developer_api_key = get_config_value("DEV_GOOGLE_API_KEY")
         use_dev_key = False
         api_key = ""
 
@@ -174,7 +196,10 @@ def main():
         if not use_dev_key:
             if personal_api_key:
                 api_key = personal_api_key
-                st.success("Using Google Gemini API key from Streamlit secrets.")
+                if os.getenv("GOOGLE_API_KEY"):
+                    st.success("Using Google Gemini API key from environment variables.")
+                else:
+                    st.success("Using Google Gemini API key from Streamlit secrets.")
             else:
                 st.write(
                     "You can apply for a Gemini API key at [Google AI Studio](https://ai.google.dev/aistudio), which includes some free requests per day.")
