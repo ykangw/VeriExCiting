@@ -46,11 +46,11 @@ git clone https://github.com/ykangw/VeriExCiting.git
 cd VeriExciting
 ```
 
-2. Install the Python dependencies (uv recommended, pip works too):
+2. Install the Python dependencies (`pyproject.toml` is the source of truth; `requirements.txt` mirrors the runtime set for plain `pip` and Docker builds):
 
 ```bash
 # using uv
-uv pip install -r requirements.txt
+uv sync
 
 # or using pip
 pip install -r requirements.txt
@@ -61,6 +61,37 @@ pip install -r requirements.txt
 ```bash
 streamlit run streamlit_app.py
 ```
+
+## Run with Docker
+
+Build the image:
+
+```bash
+docker build -t veriexcite .
+```
+
+Run the app on port `8501` and pass secrets as environment variables:
+
+```bash
+docker run --rm -p 8501:8501 \
+  -e GOOGLE_API_KEY=your-google-key \
+  -e OPENALEX_MAILTO=your.email@example.com \
+  veriexcite
+```
+
+Or use Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Then open [http://localhost:8501](http://localhost:8501).
+
+Notes:
+- `.streamlit/secrets.toml` is intentionally excluded from the image. Pass `GOOGLE_API_KEY`, `OPENALEX_MAILTO`, and optionally `OPENALEX_DATA_VERSION` at runtime.
+- `compose.yaml` mounts `./.streamlit/secrets.toml` into `/home/appuser/.streamlit/secrets.toml` as read-only, so local secrets can be used without baking them into the image.
+- The container installs from `uv.lock` with `uv sync --frozen`, so image builds are reproducible. `requirements.txt` is still available for plain `pip` installs.
+- Development-only tools such as `ruff` are kept out of the production image.
 
 **Set Google Gemini API Key:**
 

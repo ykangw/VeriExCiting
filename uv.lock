@@ -1937,7 +1937,7 @@ socks = [
 [[package]]
 name = "veriexciting"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "google-genai" },
@@ -1953,12 +1953,12 @@ dependencies = [
     { name = "tabulate" },
     { name = "tenacity" },
     { name = "unidecode" },
-    { name = "watchdog" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "ruff" },
+    { name = "watchdog" },
 ]
 
 [package.metadata]
@@ -1977,11 +1977,13 @@ requires-dist = [
     { name = "tabulate", specifier = ">=0.9.0" },
     { name = "tenacity", specifier = ">=9.0.0" },
     { name = "unidecode", specifier = ">=1.3.8" },
-    { name = "watchdog", specifier = ">=4.0.0" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.11.6" }]
+dev = [
+    { name = "ruff", specifier = ">=0.11.6" },
+    { name = "watchdog", specifier = ">=4.0.0" },
+]
 
 [[package]]
 name = "watchdog"
